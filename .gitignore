@@ -7,3 +7,5 @@ coverage.html
 
 # cross-compiled release archives (`just release`)
 /dist
+
+.DS_Store

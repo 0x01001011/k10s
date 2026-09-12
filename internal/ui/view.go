@@ -79,9 +79,6 @@ func gauge(th theme.Theme, pct, width int) string {
 	return on + off + " " + num
 }
 
-// nodeCap is the mocked per-node capacity used for the cluster totals.
-const nodeCores, nodeGiB = 16, 64
-
 func (m *Model) viewHeader(l layout) Block {
 	th := m.th()
 	s := func(c lipgloss.Color) lipgloss.Style {
@@ -94,17 +91,24 @@ func (m *Model) viewHeader(l layout) Block {
 
 	ready := 0
 	cpuSum, memSum := 0, 0
+	var usedMilli, allocMilli, usedBytes, allocBytes int64
 	for _, n := range nodes {
 		if n.Status == "Ready" {
 			ready++
 		}
 		cpuSum += n.CPU
 		memSum += n.Mem
+		usedMilli += n.CPUMilli
+		allocMilli += n.CPUAllocMilli
+		usedBytes += n.MemBytes
+		allocBytes += n.MemAllocBytes
 	}
 	nn := maxi(1, len(nodes))
 	cpuPct, memPct := cpuSum/nn, memSum/nn
-	usedCores := float64(cpuSum) * nodeCores / 100
-	usedGiB := float64(memSum) * nodeGiB / 100
+	// Totals come from each node's own allocatable, so mixed-size clusters
+	// add up to what `kubectl top node` shows rather than a per-node guess.
+	usedCores, totalCores := float64(usedMilli)/1000, float64(allocMilli)/1000
+	usedGiB, totalGiB := float64(usedBytes)/(1<<30), float64(allocBytes)/(1<<30)
 
 	brand := s(th.Accent).Bold(true).Render(" ⎈ k10s")
 	sep := s(th.Border).Render("  │  ")
@@ -163,11 +167,11 @@ func (m *Model) viewHeader(l layout) Block {
 	}
 	totals := s(th.Subtle).Bold(true).Render(" CPU  ") + gauge(th, cpuPct, 16) +
 		s(th.Bg).Render(" ") + trendGlyph(th, th.Bg, m.cpuTrend.arrow(m.anim)) +
-		s(th.Subtle).Render(fmt.Sprintf("  %.1f/%d cores", usedCores, nn*nodeCores)) +
+		s(th.Subtle).Render(fmt.Sprintf("  %.1f/%.0f cores", usedCores, totalCores)) +
 		s(th.Bg).Render("    ") +
 		s(th.Subtle).Bold(true).Render("MEM  ") + gauge(th, memPct, 16) +
 		s(th.Bg).Render(" ") + trendGlyph(th, th.Bg, m.memTrend.arrow(m.anim)) +
-		s(th.Subtle).Render(fmt.Sprintf("  %.0f/%d GiB", usedGiB, nn*nodeGiB))
+		s(th.Subtle).Render(fmt.Sprintf("  %.1f/%.1f GiB", usedGiB, totalGiB))
 	// nn is clamped to 1 so the averages above cannot divide by zero, which
 	// with no nodes at all would print "0.0/16 cores" — a capacity figure for
 	// a cluster that isn't there. Say nothing instead.

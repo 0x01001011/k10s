@@ -110,7 +110,11 @@ type ClusterInfo struct {
 // NodeInfo is one row of the header's cluster-total gauges.
 type NodeInfo struct {
 	Name, Status, Role, Ver string
-	CPU, Mem                int // percent
+	CPU, Mem                int // percent of allocatable, as `kubectl top node`
+	// Absolute readings behind the percentages: metrics-server usage and the
+	// node's allocatable, so the header can total nodes of different sizes.
+	CPUMilli, CPUAllocMilli int64
+	MemBytes, MemAllocBytes int64
 	Age                     string
 }
 

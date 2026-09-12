@@ -61,17 +61,10 @@ func (s *Store) TopNode(name string) (string, error) {
 
 	cpu := nm.Usage[corev1.ResourceCPU]
 	mem := nm.Usage[corev1.ResourceMemory]
-	capCPU := n.Status.Capacity.Cpu().MilliValue()
-	capMem := n.Status.Capacity.Memory().Value()
 	allocCPU := n.Status.Allocatable.Cpu()
 	allocMem := n.Status.Allocatable.Memory()
-	cpuPct, memPct := 0, 0
-	if capCPU > 0 {
-		cpuPct = int(cpu.MilliValue() * 100 / capCPU)
-	}
-	if capMem > 0 {
-		memPct = int(mem.Value() * 100 / capMem)
-	}
+	// Percent of allocatable, as `kubectl top node` prints it.
+	cpuPct, memPct := pct(cpu.MilliValue(), allocCPU.MilliValue()), pct(mem.Value(), allocMem.Value())
 	sched := "schedulable"
 	if n.Spec.Unschedulable {
 		sched = "SchedulingDisabled"

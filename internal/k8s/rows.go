@@ -498,7 +498,12 @@ func (s *Store) svcRows(ns string) []nsRow {
 	for _, svc := range items {
 		ports := make([]string, 0, len(svc.Spec.Ports))
 		for _, p := range svc.Spec.Ports {
-			ports = append(ports, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
+			// kubectl style: NodePort/LoadBalancer show "port:nodePort/proto".
+			if p.NodePort != 0 {
+				ports = append(ports, fmt.Sprintf("%d:%d/%s", p.Port, p.NodePort, p.Protocol))
+			} else {
+				ports = append(ports, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
+			}
 		}
 		portStr := strings.Join(ports, ",")
 		if portStr == "" {
@@ -649,24 +654,28 @@ func nodeStatus(n *corev1.Node) string {
 	return status
 }
 
+// nodeUsage returns metrics-server usage and the node's allocatable. Percents
+// are against allocatable, matching `kubectl top node` (capacity would read
+// lower than what kubectl and the cluster report).
+func nodeUsage(n *corev1.Node, s *Store) (m metricSample, allocCPU, allocMem int64) {
+	m, _ = s.nodeMetric(n.Name)
+	return m, n.Status.Allocatable.Cpu().MilliValue(), n.Status.Allocatable.Memory().Value()
+}
+
 func nodePercents(n *corev1.Node, s *Store) (cpuPct, memPct int) {
-	m, ok := s.nodeMetric(n.Name)
-	if !ok {
-		return 0, 0
+	m, allocCPU, allocMem := nodeUsage(n, s)
+	return pct(m.cpuMilli, allocCPU), pct(m.memBytes, allocMem)
+}
+
+func pct(used, total int64) int {
+	if total <= 0 {
+		return 0
 	}
-	capCPU := n.Status.Capacity.Cpu().MilliValue()
-	capMem := n.Status.Capacity.Memory().Value()
-	if capCPU > 0 {
-		cpuPct = int(m.cpuMilli * 100 / capCPU)
-	}
-	if capMem > 0 {
-		memPct = int(m.memBytes * 100 / capMem)
-	}
-	return
+	return int(used * 100 / total)
 }
 
 func nodeInfo(n *corev1.Node, s *Store) domain.NodeInfo {
-	cpuPct, memPct := nodePercents(n, s)
+	m, allocCPU, allocMem := nodeUsage(n, s)
 	role := "worker"
 	if strings.Contains(nodeRoles(n), "control-plane") || strings.Contains(nodeRoles(n), "master") {
 		role = "control-plane"
@@ -679,7 +688,10 @@ func nodeInfo(n *corev1.Node, s *Store) domain.NodeInfo {
 	}
 	return domain.NodeInfo{
 		Name: n.Name, Status: status, Role: role, Ver: n.Status.NodeInfo.KubeletVersion,
-		CPU: cpuPct, Mem: memPct, Age: age(n.CreationTimestamp.Time),
+		CPU: pct(m.cpuMilli, allocCPU), Mem: pct(m.memBytes, allocMem),
+		CPUMilli: m.cpuMilli, CPUAllocMilli: allocCPU,
+		MemBytes: m.memBytes, MemAllocBytes: allocMem,
+		Age: age(n.CreationTimestamp.Time),
 	}
 }
 

@@ -102,7 +102,12 @@ func (s *Source) Nodes() []domain.NodeInfo {
 	defer s.mu.Unlock()
 	out := make([]domain.NodeInfo, len(s.nodes))
 	for i, n := range s.nodes {
-		out[i] = domain.NodeInfo{Name: n.Name, Status: n.Status, Role: n.Role, Ver: n.Ver, CPU: n.CPU, Mem: n.Mem, Age: n.Age}
+		allocCPU, allocMem := int64(nodeCores*1000), int64(nodeGiB)<<30
+		out[i] = domain.NodeInfo{
+			Name: n.Name, Status: n.Status, Role: n.Role, Ver: n.Ver, CPU: n.CPU, Mem: n.Mem, Age: n.Age,
+			CPUMilli: allocCPU * int64(n.CPU) / 100, CPUAllocMilli: allocCPU,
+			MemBytes: allocMem * int64(n.Mem) / 100, MemAllocBytes: allocMem,
+		}
 	}
 	return out
 }

@@ -178,6 +178,7 @@ var resourceFixtures = []resourceDef{
 			{"api-gateway", "ClusterIP", "10.96.31.10", "80/TCP", "48d"},
 			{"cache-redis", "Headless", "None", "6379/TCP", "62d"},
 			{"payment-api", "ClusterIP", "10.96.14.77", "8080/TCP", "77d"},
+			{"web-admin", "NodePort", "10.96.7.140", "8080:30080/TCP", "21d"},
 			{"web-frontend", "LoadBalancer", "10.96.4.201", "80:31380/TCP", "9d"},
 		},
 		Extra: []nsRow{
