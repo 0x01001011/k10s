@@ -1480,11 +1480,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		switch {
 		case m.mode == modeText || m.mode == modeLogs || m.mode == modeContexts:
-			if m.logStop != nil {
-				m.logStop()
-				m.logStop = nil
-			}
-			m.mode = modeTable
+			m.backToTable()
 		case m.zoomed:
 			m.setZoomed(false)
 		}
@@ -1849,7 +1845,12 @@ func (m *Model) moveList(delta int) {
 		pos++
 		delta--
 	}
-	m.selectResource(f[clamp(pos+delta, 0, len(f)-1)])
+	// A step that goes nowhere — ↑ on the first kind — must not touch the
+	// main panel: re-selecting the current kind is what closes a log or
+	// describe view, and a key that moved nothing should close nothing.
+	if next := f[clamp(pos+delta, 0, len(f)-1)]; next != m.resIdx {
+		m.selectResource(next)
+	}
 }
 
 func (m *Model) move(delta int) {
@@ -1900,10 +1901,14 @@ func (m *Model) syncScroll() {
 
 func (m *Model) selectResource(i int) {
 	if i == m.resIdx {
+		// The kind you are already on is not a no-op: from a describe, a
+		// log stream or a shell, clicking "Pods" is how you get back to the
+		// pod list. Only the view changes — the row and filter are kept.
+		m.backToTable()
 		return
 	}
 	m.resIdx = i
-	m.mode = modeTable
+	m.backToTable()
 	m.rowSearch = ""
 	m.rowIdx = m.rowMem[m.curKind().Key]
 	_, rows := m.tableData()
@@ -1912,6 +1917,22 @@ func (m *Model) selectResource(i int) {
 	m.syncScroll()
 	m.syncListScroll()
 	m.toast = "→ " + m.curKind().Name
+}
+
+// backToTable leaves whatever the main panel is showing — a describe, a
+// log stream, a shell — and returns to the list. Anything still streaming
+// is torn down first: a log follow left running behind a table keeps
+// appending lines nobody can see, and a shell left open keeps the pod's
+// exec alive until something else happens to close it.
+func (m *Model) backToTable() {
+	if m.logStop != nil {
+		m.logStop()
+		m.logStop = nil
+	}
+	if m.mode == modeShell {
+		m.closeShell("")
+	}
+	m.mode = modeTable
 }
 
 func (m *Model) fireAction(a Action) tea.Cmd {
@@ -2342,7 +2363,7 @@ func (m *Model) gotoKind(key, arg string) {
 	}
 
 	m.jumpToResource(key)
-	m.mode = modeTable
+	m.backToTable()
 	m.rowSearch = ""
 	label := "→ " + m.curKind().Name
 
@@ -2573,7 +2594,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 	if zone.Get("close").InBounds(msg) {
-		m.mode = modeTable
+		m.backToTable()
 		return nil
 	}
 	if zone.Get("updbtn").InBounds(msg) {
