@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hinshun/vt10x"
 
-	"github.com/p10node/k10s/internal/theme"
+	"github.com/0x01001011/k10s/internal/theme"
 )
 
 // An interactive shell rendered inside the main panel.

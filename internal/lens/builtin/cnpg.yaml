@@ -1,0 +1,199 @@
+# CloudNativePG — postgresql.cnpg.io/v1, one served version.
+#
+# Every high-stakes action is one annotation or one status patch. Promoting
+# a Postgres primary from a TUI is exactly the moment you would otherwise
+# be googling the kubectl incantation.
+#
+# .status.phase is a human sentence, not a slug ("Cluster is unrecoverable
+# and needs manual intervention"), so the severity table names the one good
+# value and defaults the rest to warn.
+#
+# Backup recency deliberately does NOT read .status.lastSuccessfulBackup:
+# that whole family is deprecated because backup moved to the CNPG-I
+# plugin. It comes from Backup CRs instead.
+name: cnpg
+requires:
+  - postgresql.cnpg.io/v1
+
+severities:
+  cluster-phase:
+    ok: ["Cluster in healthy state"]
+    default: warn
+  backup-phase:
+    ok: [completed]
+    warn: [pending, started, running, finalizing]
+    error: [failed, walArchivingFailing, "invalid backup definition"]
+    default: unknown
+  pooler-phase:
+    ok: ["Pooler is ready"]
+    default: warn
+
+kinds:
+  - key: cnpg-clusters
+    name: PG Clusters
+    short: pgc
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/clusters
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: READY, path: .status.readyInstances, format: int}
+      - {header: INSTANCES, path: .status.instances, format: int}
+      - {header: PRIMARY, path: .status.currentPrimary}
+      - {header: PHASE, path: .status.phase, severity: cluster-phase}
+      - {header: TIMELINE, path: .status.timelineID, format: int}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions:
+      - describe
+      - yaml
+      - cnpg-promote
+      - cnpg-backup
+      - cnpg-restart
+      - cnpg-reload
+      - cnpg-fence
+      - cnpg-unfence
+      - cnpg-hibernate
+      - cnpg-wake
+      - edit
+
+  - key: cnpg-backups
+    name: PG Backups
+    short: pgb
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/backups
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CLUSTER, path: .spec.cluster.name}
+      - {header: PHASE, path: .status.phase, severity: backup-phase}
+      - {header: METHOD, path: .status.method}
+      - {header: FINISHED, path: .status.stoppedAt, format: age}
+      - {header: ERROR, path: .status.error}
+    actions: [describe, yaml, delete]
+
+  - key: cnpg-scheduledbackups
+    name: PG Scheduled Backups
+    short: pgsb
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/scheduledbackups
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CLUSTER, path: .spec.cluster.name}
+      - {header: SCHEDULE, path: .spec.schedule}
+      - {header: LAST, path: .status.lastScheduleTime, format: age}
+      - {header: NEXT, path: .status.nextScheduleTime}
+      - {header: ERROR, path: .status.error}
+    actions: [describe, yaml, edit, delete]
+
+  - key: cnpg-poolers
+    name: PG Poolers
+    short: pgp
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/poolers
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CLUSTER, path: .spec.cluster.name}
+      - {header: TYPE, path: .spec.type}
+      - {header: INSTANCES, path: .status.instances, format: int}
+      - {header: PHASE, path: .status.phase, severity: pooler-phase}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+actions:
+  # What kubectl-cnpg's promote command does: patch clusters/status under
+  # optimistic lock. .Selected is the instance pod chosen in the picker.
+  - id: cnpg-promote
+    label: Promote instance to primary
+    verb: status-patch
+    confirm: typed
+    retryOnConflict: true
+    # targetPrimary is an INSTANCE (a pod, "<cluster>-2"), never the Cluster's
+    # own name. docs/lenses.md once showed {{.Name}} here; that was wrong.
+    requiresSelection: true
+    patch:
+      status:
+        targetPrimary: "{{.Selected}}"
+        targetPrimaryTimestamp: "{{.Now}}"
+        phase: Switchover in progress
+        phaseReason: Switchover requested from k10s
+
+  - id: cnpg-backup
+    label: Back up now
+    verb: create
+    confirm: "true"
+    template:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Backup
+      metadata:
+        generateName: "{{.Name}}-k10s-"
+        namespace: "{{.Namespace}}"
+      spec:
+        cluster:
+          name: "{{.Name}}"
+
+  - id: cnpg-restart
+    label: Rolling restart
+    verb: annotate
+    confirm: "true"
+    annotations:
+      kubectl.kubernetes.io/restartedAt: "{{.Now}}"
+
+  - id: cnpg-reload
+    label: Reload configuration
+    verb: annotate
+    annotations:
+      cnpg.io/reloadedAt: "{{.Now}}"
+
+  # The value is a JSON-encoded array, not a bare name. "*" fences every
+  # instance in the cluster.
+  - id: cnpg-fence
+    label: Fence instance
+    verb: annotate
+    confirm: typed
+    # Same as promote: the value is an instance pod name, not the Cluster's.
+    requiresSelection: true
+    annotations:
+      cnpg.io/fencedInstances: '["{{.Selected}}"]'
+
+  - id: cnpg-unfence
+    label: Unfence
+    verb: annotate
+    confirm: "true"
+    annotations:
+      cnpg.io/fencedInstances: ""
+
+  - id: cnpg-hibernate
+    label: Hibernate cluster
+    verb: annotate
+    confirm: typed
+    annotations:
+      cnpg.io/hibernation: "on"
+
+  - id: cnpg-wake
+    label: Wake cluster
+    verb: annotate
+    confirm: "true"
+    annotations:
+      cnpg.io/hibernation: "off"
+
+edges:
+  # The chain that makes this worth building: land on a broken pod, walk up
+  # to the database that owns it, across to its backups, down to the disk.
+  - from: v1/pods
+    to: postgresql.cnpg.io/v1/clusters
+    via: label
+    key: cnpg.io/cluster
+  - from: v1/persistentvolumeclaims
+    to: postgresql.cnpg.io/v1/clusters
+    via: label
+    key: cnpg.io/cluster
+  - from: postgresql.cnpg.io/v1/backups
+    to: postgresql.cnpg.io/v1/clusters
+    via: field
+    key: .spec.cluster.name
+  - from: postgresql.cnpg.io/v1/poolers
+    to: postgresql.cnpg.io/v1/clusters
+    via: field
+    key: .spec.cluster.name

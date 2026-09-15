@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/p10node/k10s/internal/config"
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/config"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 func groupOf(m *Model, key string) string {

@@ -1,7 +1,7 @@
 #!/bin/sh
 # k10s uninstaller — removes the binary, and the config only if asked.
 #
-#   curl -fsSL https://p10node.com/k10s/uninstall.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/uninstall.sh | sh
 #
 # The mirror of install.sh: same shells, same flags where they overlap, same
 # TTY-aware sudo rule. It only ever deletes a file named k10s (or the
@@ -15,7 +15,7 @@
 set -eu
 
 BIN="k10s"
-REPO="p10node/k10s"
+REPO="0x01001011/k10s"
 
 INSTALL_DIR="${K10S_INSTALL_DIR:-}"
 NO_SUDO="${K10S_NO_SUDO:-}"
@@ -42,8 +42,8 @@ usage() {
     cat >&2 <<EOF
 ${B}k10s uninstaller${R}
 
-  curl -fsSL https://p10node.com/k10s/uninstall.sh | sh
-  curl -fsSL https://p10node.com/k10s/uninstall.sh | sh -s -- --purge
+  curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/uninstall.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/uninstall.sh | sh -s -- --purge
 
 Options
   --purge          also delete ~/.k10s (config, theme choice)
@@ -214,7 +214,7 @@ if [ -z "$PURGE" ] && [ -n "$CONFIG_TARGET" ] && [ -z "$KEEP_CONFIG" ]; then
 fi
 
 say ""
-say "  Reinstall any time: ${B}curl -fsSL https://p10node.com/k10s/install.sh | sh${R}"
+say "  Reinstall any time: ${B}curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/install.sh | sh${R}"
 say "  Bug or missing feature? https://github.com/$REPO/issues"
 
 [ "$failed" -gt 0 ] && exit 1

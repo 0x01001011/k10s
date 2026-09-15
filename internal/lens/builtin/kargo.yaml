@@ -1,0 +1,181 @@
+# Kargo — kargo.akuity.io/v1alpha1. Nine CRDs exist; this declares the four
+# you look at daily.
+#
+# Two traps that older material gets wrong, both encoded here:
+#   * Stage.status.currentFreight and Stage.status.phase DO NOT EXIST. Use
+#     .status.freightSummary, which was added precisely to be a table
+#     column, plus .status.health.status.
+#   * Freight has no spec at all. alias, origin, commits and images are
+#     top-level fields.
+#
+# Promotion names are <stage>.<ULID>.<hash>, so sorting by name is sorting
+# by time, for free.
+#
+# RBAC: the validating webhook issues a SubjectAccessReview for the virtual
+# verb `promote` on stages. Plain `create` on promotions is NOT enough, and
+# the refusal arrives as a webhook rejection at create time rather than a
+# 403 on the thing you clicked. Surface the message verbatim.
+name: kargo
+requires:
+  - kargo.akuity.io/v1alpha1
+
+severities:
+  health:
+    ok: [Healthy, NotApplicable]
+    warn: [Progressing]
+    error: [Unhealthy]
+    default: unknown
+  promo-phase:
+    ok: [Succeeded]
+    warn: [Pending, Running]
+    error: [Failed, Errored, Aborted]
+    default: unknown
+  verification:
+    ok: [Successful]
+    warn: [Pending, Running]
+    error: [Failed, Error, Aborted, Inconclusive]
+    default: unknown
+
+kinds:
+  - key: kargo-stages
+    name: Stages
+    short: stage
+    group: Kargo
+    gvr: kargo.akuity.io/v1alpha1/stages
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: FREIGHT, path: .status.freightSummary}
+      - {header: HEALTH, path: .status.health.status, severity: health}
+      - {header: LAST PROMO, path: .status.lastPromotion.status.phase, severity: promo-phase}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, kargo-promote, kargo-refresh, kargo-reverify, edit]
+
+  - key: kargo-promotions
+    name: Promotions
+    short: promo
+    group: Kargo
+    gvr: kargo.akuity.io/v1alpha1/promotions
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: STAGE, path: .spec.stage}
+      - {header: FREIGHT, path: .spec.freight}
+      - {header: PHASE, path: .status.phase, severity: promo-phase}
+      - {header: STEP, path: .status.currentStep, format: int}
+      - {header: STARTED, path: .status.startedAt, format: age}
+      - {header: MESSAGE, path: .status.message}
+    actions: [describe, yaml, kargo-abort, kargo-refresh]
+
+  - key: kargo-freights
+    name: Freight
+    short: freight
+    group: Kargo
+    gvr: kargo.akuity.io/v1alpha1/freights
+    namespaced: true
+    columns:
+      # alias is top-level, not under spec — Freight has no spec.
+      - {header: ALIAS, path: .alias}
+      - {header: NAME, path: .metadata.name}
+      - {header: ORIGIN, path: .origin.name}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, kargo-approve]
+
+  - key: kargo-warehouses
+    name: Warehouses
+    short: warehouse
+    group: Kargo
+    gvr: kargo.akuity.io/v1alpha1/warehouses
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: LAST FREIGHT, path: .status.lastFreightID}
+      - {header: DISCOVERED, path: .status.discoveredArtifacts.discoveredAt, format: age}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, kargo-refresh, edit]
+
+actions:
+  # Deliberately minimal. The mutating webhook fills in the name and copies
+  # spec.steps from the Stage's promotionTemplate, inflating PromotionTask
+  # references as it goes. Building steps client-side would go stale the
+  # moment the template changes.
+  - id: kargo-promote
+    label: Promote freight
+    verb: create
+    confirm: "true"
+    # spec.freight is a Freight name; the Stage's own name is not one.
+    requiresSelection: true
+    template:
+      apiVersion: kargo.akuity.io/v1alpha1
+      kind: Promotion
+      metadata:
+        generateName: promo-
+        namespace: "{{.Namespace}}"
+      spec:
+        stage: "{{.Name}}"
+        freight: "{{.Selected}}"
+
+  # Approval is a status write on the freights/status subresource, not an
+  # annotation. The webhook still emits the FreightApproved event.
+  - id: kargo-approve
+    label: Approve for stage
+    verb: status-patch
+    confirm: "true"
+    retryOnConflict: true
+    # The map key is the Stage to approve for; the Freight's own name is not
+    # a Stage name.
+    requiresSelection: true
+    patch:
+      status:
+        approvedFor:
+          "{{.Selected}}":
+            approvedAt: "{{.Now}}"
+
+  # The controller echoes what we wrote into .status.lastHandledRefresh,
+  # which is exactly the acknowledgement the spinner waits on.
+  - id: kargo-refresh
+    label: Refresh
+    verb: annotate
+    ack: .status.lastHandledRefresh
+    annotations:
+      kargo.akuity.io/refresh: "{{.Now}}"
+
+  - id: kargo-abort
+    label: Abort promotion
+    verb: annotate
+    confirm: typed
+    annotations:
+      kargo.akuity.io/abort: '{"action":"terminate","actor":"k10s"}'
+
+  # Same annotation key as abort, different payload shape depending on the
+  # object kind. An empty id is silently ignored, so .Selected must be the
+  # verification id from .status.freightHistory[0].verificationHistory[0].
+  - id: kargo-reverify
+    label: Re-run verification
+    verb: annotate
+    confirm: "true"
+    # The id comes from .status.freightHistory[0].verificationHistory[0].id,
+    # never the Stage's name. An empty id is silently ignored by the
+    # controller, which is the worst possible failure: it looks like it worked.
+    requiresSelection: true
+    annotations:
+      kargo.akuity.io/reverify: '{"id":"{{.Selected}}"}'
+
+edges:
+  - from: kargo.akuity.io/v1alpha1/promotions
+    to: kargo.akuity.io/v1alpha1/stages
+    via: field
+    key: .spec.stage
+  - from: kargo.akuity.io/v1alpha1/promotions
+    to: kargo.akuity.io/v1alpha1/freights
+    via: field
+    key: .spec.freight
+  # The stage-to-Application hop is NOT declared, and that is deliberate.
+  #
+  # kargo.akuity.io/authorized-stage lives on the Application, naming the
+  # Stage allowed to update it — so `from: stages` reads an annotation that
+  # only ever exists on the other side, and never resolves. Reversing it does
+  # not fix it either: the value is "<project>:<stage>", not a bare name, and
+  # `via: annotation` matches values verbatim. An edge that silently returns
+  # nothing is worse than no edge, because it reads as "nothing is connected"
+  # rather than "this hop is not modelled".

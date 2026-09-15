@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 
-	"github.com/p10node/k10s/internal/mock"
-	"github.com/p10node/k10s/internal/theme"
+	"github.com/0x01001011/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/theme"
 )
 
 // A Panel wider than the W it reports drifts every HJoin and Overlay that

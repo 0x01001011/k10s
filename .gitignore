@@ -8,4 +8,7 @@ coverage.html
 # cross-compiled release archives (`just release`)
 /dist
 
+# CodeGraph index (rebuild with `codegraph init .`)
+/.codegraph
+
 .DS_Store

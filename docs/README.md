@@ -17,6 +17,7 @@
 | [dev.md](dev.md)                         | Build, tests, headless renderer, width invariant            |
 | [roadmap.md](roadmap.md)                 | What's done and what's left                                 |
 | [plan.md](plan.md)                       | Task cards for the backlog, ready to hand to an agent       |
+| [lenses.md](lenses.md)                   | Declarative packs for ArgoCD, CNPG, Longhorn, Kargo, Traefik |
 | [marketing.md](marketing.md)             | Positioning, channels, launch sequence, repo hygiene        |
 | [build-in-public.md](build-in-public.md) | Post shapes, cadence, the demo GIF, what stays private      |
 

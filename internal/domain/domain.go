@@ -213,3 +213,110 @@ func SortNames(names []string) {
 }
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+// ---------------------------------------------------------------------------
+// T29 — lens severity.
+// ---------------------------------------------------------------------------
+
+// CellLevels reports the severity bucket of one already-rendered table cell.
+// It is a pure lookup over the pack's severity table — no I/O — so the render
+// path may call it per visible cell. A backend that does not implement it
+// simply keeps today's colouring.
+//
+// The cell is addressed by COLUMN NAME rather than index on purpose: ns=all
+// prepends a NAMESPACE column and the table filters rows, so anything keyed by
+// index drifts.
+type CellLevels interface {
+	// CellLevel returns "ok", "warn", "error", "unknown", or "" when this
+	// column declares no severity.
+	CellLevel(kind, column, value string) string
+}
+
+// ---------------------------------------------------------------------------
+// T30 — lens actions.
+// ---------------------------------------------------------------------------
+
+// LensActionSpec is one declarative verb as the UI needs it: enough to draw a
+// button, open the right confirm modal, and fire it by id.
+//
+// There is no keybinding. A lens action declares none, and the twelve builtin
+// keys are taken — so lens verbs are clicked or chosen from the pane.
+type LensActionSpec struct {
+	ID    string
+	Label string
+	// Confirm is "", "true", or "typed".
+	Confirm string
+	// Kubectl is the equivalent command, shown in the confirm modal so the
+	// operator can check the claim before agreeing to it.
+	Kubectl string
+	// Notice is pack-supplied text the modal shows verbatim — the ArgoCD
+	// RBAC-bypass disclosure arrives this way rather than as a constant.
+	Notice string
+	// AckPath is non-empty when the controller publishes an acknowledgement
+	// the UI can watch for.
+	AckPath string
+	// Disabled marks an action that cannot run right now; DisabledWhy says
+	// so in the pane, instead of letting the user fire something that would
+	// silently target the wrong object.
+	Disabled    bool
+	DisabledWhy string
+	// NeedsSelection distinguishes the ONE disabled reason the UI can do
+	// something about — "name an instance and I will run" — from every other
+	// reason, which is a refusal. Sniffing DisabledWhy for a word would tie
+	// the two together through pack-authored free text: a `refuseWhen`
+	// reason mentioning "the selected revision" would open an input box
+	// instead of refusing.
+	NeedsSelection bool
+}
+
+// LensVerbs runs a lens pack's declarative actions. A backend that does not
+// implement it simply shows no lens buttons.
+type LensVerbs interface {
+	LensActions(kind, ns, name, selected string) []LensActionSpec
+	// LensAction runs the verb and returns the value the controller is
+	// expected to echo back, or "" when the action declares no
+	// acknowledgement. The caller holds it and hands it to LensAck.
+	LensAction(kind, ns, name, id, selected string) (ack string, err error)
+	// LensAck reports whether the controller has acknowledged the write.
+	//
+	// want is what LensAction returned. Comparing against it is the whole
+	// point: a controller that handled some EARLIER request already left a
+	// non-empty value in the ack field, so testing mere presence would clear
+	// the spinner before this request was ever seen.
+	LensAck(kind, ns, name, id, want string) (ok bool, err error)
+}
+
+// ---------------------------------------------------------------------------
+// T36 — lens relationships.
+// ---------------------------------------------------------------------------
+
+// Ref is one end of a navigable relationship.
+//
+// Loaded is false when the target kind has no running informer — the panel
+// says so rather than opening a watch behind the user's back — or when no
+// declared kind serves that GVR at all.
+type Ref struct {
+	// Kind is a kind key, or the raw GVR string when nothing serves it.
+	Kind      string
+	Namespace string
+	Name      string
+	// Rel is the edge's via, for the panel's label.
+	Rel    string
+	Loaded bool
+}
+
+// LensProblems reports a lens pack that failed to load or was rejected.
+//
+// It exists because the alternative is silence: a pack with a typo simply
+// never appears, and "your YAML is broken" then looks exactly like "those
+// CRDs are not installed on this cluster" — which is a normal, intended,
+// silent outcome. Only one of the two is worth telling the user about.
+type LensProblems interface {
+	LensErr() error
+}
+
+// Related resolves one object's declared edges, in both directions, one hop at
+// a time.
+type Related interface {
+	Related(kind, ns, name string) ([]Ref, error)
+}

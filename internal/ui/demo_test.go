@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	zone "github.com/lrstanley/bubblezone"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 // demoConnect is main.go's routing rule: a demo context name is served by the

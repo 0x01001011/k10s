@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/0x01001011/k10s/internal/theme"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/p10node/k10s/internal/theme"
 )
 
 // A trend remembers which way a metric last moved. Usage rising is drawn as

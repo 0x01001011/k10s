@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/duration"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // nsRow pairs a namespace with a rendered row, mirroring how mock.NSRow used
@@ -103,9 +103,16 @@ func sortRows(rows [][]string, cols ...int) {
 }
 
 func (s *Store) Rows(kind, ns string) ([]string, [][]string) {
-	k := findKind(kind)
+	// s.findKind resolves lens keys as well as builtins.
+	k := s.findKind(kind)
 	if k == nil {
 		return s.crRows(kind, ns)
+	}
+	// T29. A lens kind builds its row from compiled JSONPaths rather than a
+	// typed formatter. Placed before the switch so no builtin key can ever
+	// be shadowed by a pack.
+	if lk, ok := s.lensKindFor(kind); ok {
+		return s.lensTable(lk, ns)
 	}
 	switch kind {
 	case "pods":
@@ -230,6 +237,13 @@ func (s *Store) RowCount(kind, ns string) int {
 			return n
 		}
 		return domain.CountUnknown
+	}
+
+	// T28/T29. Strictly AFTER the guard above: an unopened lens kind returns
+	// CountUnknown without ever reaching a lister, so drawing a sidebar badge
+	// cannot open a watch. lensCount formats not one cell.
+	if lk, ok := s.lensKindFor(kind); ok {
+		return s.lensCount(lk, ns)
 	}
 
 	switch kind {

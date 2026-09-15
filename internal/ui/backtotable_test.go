@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 // clickKind clicks the sidebar row of the kind with the given key. The view

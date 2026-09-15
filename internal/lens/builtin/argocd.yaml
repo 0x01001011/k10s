@@ -1,0 +1,182 @@
+# ArgoCD — argoproj.io/v1alpha1 is the only served version; there is no
+# v1beta1. Three CRDs, all namespaced.
+#
+# Every action here is a plain Kubernetes write. Sync is not a call to
+# argocd-server: setting top-level .operation is literally what the server
+# does. Application has no status subresource, so one update carries both
+# .operation and .status writes.
+#
+# SECURITY: writing .operation bypasses argocd-rbac-cm entirely. That
+# policy is enforced by argocd-server, which never sees a direct CR write —
+# so anyone holding `update` on applications can effectively sync anything.
+# The confirm modal says so. See docs/lenses.md.
+name: argocd
+requires:
+  - argoproj.io/v1alpha1
+
+severities:
+  sync:
+    ok: [Synced]
+    warn: [OutOfSync]
+    unknown: [Unknown]
+  health:
+    ok: [Healthy]
+    warn: [Progressing, Suspended]
+    error: [Degraded, Missing]
+    unknown: [Unknown]
+  operation:
+    ok: [Succeeded]
+    warn: [Running, Terminating]
+    error: [Failed, Error]
+    default: unknown
+
+kinds:
+  - key: argocd-apps
+    name: Applications
+    short: app
+    group: ArgoCD
+    gvr: argoproj.io/v1alpha1/applications
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: SYNC, path: .status.sync.status, severity: sync}
+      - {header: HEALTH, path: .status.health.status, severity: health}
+      - {header: OPERATION, path: .status.operationState.phase, severity: operation}
+      - {header: REVISION, path: .status.sync.revision, truncate: 7}
+      - {header: PROJECT, path: .spec.project}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions:
+      - describe
+      - yaml
+      - argocd-sync
+      - argocd-rollback
+      - argocd-refresh
+      - argocd-hard-refresh
+      - argocd-terminate
+      - edit
+
+  - key: argocd-appsets
+    name: ApplicationSets
+    short: appset
+    group: ArgoCD
+    gvr: argoproj.io/v1alpha1/applicationsets
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # No APPS count: ApplicationSetStatus carries conditions,
+      # applicationStatus and resources — there is no resourcesCount, so a
+      # column reading one renders an empty cell on every row and looks like
+      # a broken table rather than a field that does not exist.
+      - {header: GENERATORS, path: ".spec.generators[*]"}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: argocd-projects
+    name: AppProjects
+    short: appproj
+    group: ArgoCD
+    gvr: argoproj.io/v1alpha1/appprojects
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: DESTINATIONS, path: ".spec.destinations[*].namespace"}
+      # A closed sync window is enforced by the controller, not a webhook:
+      # the sync is ACCEPTED and then silently not executed. Showing the
+      # window kinds is what stops that being a mystery.
+      - {header: WINDOWS, path: ".spec.syncWindows[*].kind"}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit]
+
+actions:
+  # The whole of "argocd app sync". argo.SetAppOperation does exactly this:
+  # get, set .Operation, clear .Status.OperationState, update.
+  - id: argocd-sync
+    label: Sync
+    verb: patch
+    confirm: "true"
+    notice: >-
+      This writes .operation directly on the Application, which is what
+      argocd-server itself does — but argocd-rbac-cm (policy.csv) is enforced
+      by argocd-server, and a direct resource write never reaches it. Anyone
+      holding `update` on applications can effectively sync anything, and
+      Argo's own policy engine will not see this.
+    refuseWhen:
+      - path: .operation
+        reason: another operation is already in progress (ErrAnotherOperationInProgress)
+      - path: .spec.syncPolicy.automated
+        reason: this Application syncs automatically; a manual sync would fight the controller
+    patch:
+      operation:
+        initiatedBy:
+          username: k10s
+          automated: false
+        sync:
+          syncStrategy:
+            apply: {}
+        info:
+          - name: k10s
+            value: "synced from k10s at {{.Now}}"
+
+  # Rollback is sync with a revision taken from .status.history[], so it needs
+  # a real sub-row: the volume's own name is not a git revision.
+  - id: argocd-rollback
+    label: Roll back to revision
+    verb: patch
+    confirm: typed
+    requiresSelection: true
+    notice: >-
+      Rolling back writes .operation with a historical revision. The same
+      argocd-rbac-cm bypass applies as for a normal sync.
+    refuseWhen:
+      - path: .operation
+        reason: another operation is already in progress (ErrAnotherOperationInProgress)
+      - path: .spec.syncPolicy.automated
+        reason: automated sync would immediately undo the rollback
+    patch:
+      operation:
+        initiatedBy:
+          username: k10s
+          automated: false
+        sync:
+          revision: "{{.Selected}}"
+          syncStrategy:
+            apply: {}
+
+  # The controller removes the annotation once it has reconciled, so the
+  # annotation's own absence is the acknowledgement.
+  - id: argocd-refresh
+    label: Refresh
+    verb: annotate
+    annotations:
+      argocd.argoproj.io/refresh: normal
+
+  - id: argocd-hard-refresh
+    label: Hard refresh
+    verb: annotate
+    confirm: "true"
+    annotations:
+      argocd.argoproj.io/refresh: hard
+
+  # Terminate is a status write, and Application has no status subresource,
+  # so it goes through the main object like everything else here.
+  - id: argocd-terminate
+    label: Terminate operation
+    verb: patch
+    confirm: "true"
+    patch:
+      status:
+        operationState:
+          phase: Terminating
+
+edges:
+  # Argo labels every resource it manages. This is the hop from a running
+  # pod back to the Application that put it there — the question no
+  # terminal UI answers today.
+  - from: v1/pods
+    to: argoproj.io/v1alpha1/applications
+    via: label
+    key: app.kubernetes.io/instance
+  - from: apps/v1/deployments
+    to: argoproj.io/v1alpha1/applications
+    via: label
+    key: app.kubernetes.io/instance

@@ -141,6 +141,22 @@ Card chỉ xong khi **tất cả** đúng:
 - [ ] **T25** packaging: brew / scoop / nix
 - [ ] **T26** kinds còn thiếu
 
+### P4 — lenses (ecosystem operators)
+
+Spec: [lenses.md](lenses.md). Một cơ chế, năm file YAML — không phải năm feature.
+T27→T30 là cơ chế; T31→T35 là data; T36 là thứ chưa TUI nào có.
+
+- [ ] **T27** lens schema + loader (`internal/lens`)
+- [ ] **T28** dynamic kind registry — discovery gate + informer per GVR
+- [ ] **T29** JSONPath columns + severity sort (worst-first)
+- [ ] **T30** declarative actions: 5 verb + confirm modal + ack watch
+- [ ] **T31** lens: argocd
+- [ ] **T32** lens: cnpg
+- [ ] **T33** lens: longhorn
+- [ ] **T34** lens: kargo
+- [ ] **T35** lens: traefik (spec-only + router inspector opt-in)
+- [ ] **T36** edges — điều hướng quan hệ (pod → cnpg Cluster → PVC → longhorn Volume)
+
 ### Lanes
 
 Năm lane, mỗi lane một agent, mỗi lane sở hữu một vùng file. Trong lane chạy
@@ -153,6 +169,7 @@ Năm lane, mỗi lane một agent, mỗi lane sở hữu một vùng file. Trong
 | **C** streams | logs / exec / shell / port-forward stream | T02 → T09 → T20 |
 | **D** shell, config, release | `main.go`, `internal/config/`, `internal/update/` | T05 → T06 → T22 → T12 → T23 → T21 → T25 |
 | **E** view mới & AI | file mới (`pulse.go`, `treeview.go`), `internal/ai/` | T04 → T11 → T16 → T14 → T15 |
+| **F** lenses | `internal/lens/`, `internal/k8s/lens*.go` | T27 → T28 → T29 → T30 → T31 → T32 → T33 → T34 → T35 → T36 |
 
 Deps cắt ngang lane — có ba, và cả ba đều nằm **cuối** lane cần chúng:
 
@@ -164,6 +181,18 @@ D:T06 (cơ chế ẩn action)  →  A:T17
 
 Card bị chặn mà dep chưa merge → **bỏ qua, làm card kế tiếp, báo cáo là hoãn**.
 Không tự implement dep của lane khác.
+
+Lane **F** chạy sau cùng và đụng vùng của lane khác đúng hai chỗ — cả hai đều
+phải theo luật "chỉ được thêm" ở § Dispatch protocol:
+
+```
+F:T28  →  internal/k8s/store.go  (vùng lane A): Kinds() merge lens kind,
+          gvrFor() nhận key của lens. Append, không sửa nhánh builtin.
+F:T36  →  internal/ui/treeview.go (vùng lane E): panel quan hệ.
+          Chờ E:T14 (owner tree) merge xong rồi mới làm.
+```
+
+Thứ tự merge đầy đủ: `C → B → D → A → E → F`.
 
 ### Dispatch protocol
 
@@ -989,7 +1018,7 @@ người ngoài dùng, không phải sau.
 - Release ký bằng cosign keyless (OIDC GitHub Actions) → `.sig` + `.pem` cạnh
   archive.
 - Verify **trong** binary, không shell ra `cosign`. Pin identity
-  (`repo == p10node/k10s`, issuer GitHub).
+  (`repo == 0x01001011/k10s`, issuer GitHub).
 - Không có chữ ký (release cũ) → cảnh báo rõ + hỏi, không im lặng cho qua và
   cũng không cấm cứng.
 - `K10S_UPDATE_REPO` trỏ fork → identity đổi theo repo đó, và nói rõ cho user.
@@ -1090,6 +1119,298 @@ một commit riêng để review được.
 
 **Accept** — [ ] mỗi kind có row formatter + mock mirror + test · [ ]
 `RowCount` không mở watch · [ ] sidebar count đúng.
+
+---
+
+# P4
+
+Spec đầy đủ: [lenses.md](lenses.md) — đọc trước khi làm bất kỳ card nào ở đây.
+Mọi lens dùng `dynamic` + `unstructured`. **KHÔNG thêm module Go nào.**
+
+## T27 — lens schema + loader
+
+**Effort** M · **Deps** none · **Lane** F
+
+**Goal** — `internal/lens` parse file YAML theo schema ở `lenses.md`, validate,
+và trả về `[]Pack`. Lens builtin nhúng bằng `go:embed`; lens người dùng ở
+`~/.k10s/lenses/*.yaml`, trùng `name` thì đè.
+
+**Files** — `internal/lens/lens.go`, `internal/lens/builtin/*.yaml`,
+`internal/lens/lens_test.go`.
+
+Validate phải bắt: `gvr` không đúng dạng `group/version/resource`, `verb` lạ,
+`path` JSONPath không parse được, `action` id không tồn tại trong `actions[]`,
+`severity` trỏ tới bảng chưa khai báo. Lỗi kèm tên file + tên pack; **một pack
+hỏng không được làm chết pack khác** (cùng luật với `internal/plugin`).
+
+**Accept** — [ ] pack hợp lệ round-trip · [ ] mỗi loại lỗi trên có một test
+khẳng định message · [ ] pack hỏng bị bỏ qua, pack còn lại vẫn load · [ ] không
+đụng `go.mod`.
+
+---
+
+## T28 — dynamic kind registry
+
+**Effort** L · **Deps** T27 · **Lane** F
+
+**Goal** — kind của lens xuất hiện trong Resources pane **chỉ khi** discovery
+xác nhận mọi `group/version` trong `requires` đang được serve. Mỗi GVR một
+dynamic informer, tạo lazy đúng như `Store.ensure` làm với kind builtin.
+
+**Files** — `internal/k8s/lenskinds.go` (file mới), `internal/k8s/store.go`
+(`Kinds()` merge; `gvrFor` nhận key của lens), `internal/mock/lens.go`.
+
+Đây là card đổi kiến trúc: `Store.Kinds()` đang trả `Kinds()` tĩnh. Sau card
+này nó là `builtin + lens đã qua discovery gate`. Discovery chạy **một lần** lúc
+connect, kết quả cache; `SwitchContext` phải tính lại vì cluster khác có operator
+khác.
+
+**KHÔNG** đi qua `refreshCRs`. Đường đó list mọi CRD mỗi 15s; lens biết chính xác
+GVR của nó nên dùng informer — ít API call hơn hiện tại, không phải nhiều hơn.
+
+**Accept** — [ ] cluster không có operator → không kind nào của lens hiện ra, và
+không có LIST nào được phát · [ ] fake discovery có `argoproj.io/v1alpha1` → kind
+hiện ra · [ ] `RowCount` không mở watch (test gác `perf_test.go` vẫn xanh) ·
+[ ] `SwitchContext` sang context không có operator thì kind biến mất.
+
+---
+
+## T29 — JSONPath columns + severity sort
+
+**Effort** M · **Deps** T28 · **Lane** F
+
+**Goal** — dựng row từ `columns[]`: JSONPath trên unstructured, `format`
+(`age`/`bytes`/`int`/`bool`), `truncate`. `severity` map giá trị sang
+`ok|warn|error|unknown`, dùng cho cả màu row lẫn comparator.
+
+**Files** — `internal/k8s/lensrows.go`, `internal/ui/` (đường màu row),
+`internal/lens/severity.go`.
+
+Kind nào có cột severity thì **mặc định sort worst-first**. Đây là lý do tồn tại
+của card: k9s #3589 (sort theo STATUS rải CrashLoopBackOff lẫn vào Running) bị
+đóng *not planned*. Comparator, không phải feature.
+
+`default:` trong bảng severity là bắt buộc cho CNPG — `.status.phase` của nó là
+câu tiếng Anh (`"Cluster is unrecoverable and needs manual intervention"`), liệt
+kê hết là thua.
+
+Path trỏ vào field không tồn tại → ô rỗng, **không phải lỗi**. Nửa số status
+field ở P4 là optional.
+
+**Accept** — [ ] mỗi `format` một test · [ ] path thiếu → ô rỗng, không panic ·
+[ ] severity sort đẩy `error` lên đầu, trong cùng bậc thì A→Z · [ ] `View` không
+build row (perf guard).
+
+---
+
+## T30 — declarative actions
+
+**Effort** L · **Deps** T29 · **Lane** F
+
+**Goal** — 5 verb: `annotate`, `patch`, `status-patch`, `create`, `delete`.
+Template var `.Name` `.Namespace` `.Context` `.Now` `.Selected`.
+
+**Files** — `internal/k8s/lensactions.go`, `internal/ui/confirm.go`,
+`internal/lens/template.go`.
+
+`ack` là lý do đây là cơ chế chứ không phải năm cái nút: ghi annotation xong
+watch field ack (`.status.lastHandledRefresh`), khớp thì tắt spinner. Ba trong
+năm operator có field này.
+
+`confirm: true` → modal **hiện câu `kubectl` tương đương**. `confirm: typed` →
+phải gõ đúng tên object. Chỉ action failover/destructive mới dùng `typed`:
+approval fatigue là failure mode có thật, prompt nhiều thì người ta bấm bừa.
+
+`retryOnConflict` cho status-patch (CNPG promote chạy dưới optimistic lock).
+
+**Accept** — [ ] mỗi verb một test với fake dynamic client · [ ] ack khớp thì
+spinner tắt, không khớp thì vẫn quay · [ ] `typed` sai tên → không gửi request ·
+[ ] modal chứa đúng câu kubectl · [ ] 403 hiện message nguyên văn của server.
+
+---
+
+## T31 — lens: argocd
+
+**Effort** M · **Deps** T30 · **Lane** F
+
+**Goal** — `argoproj.io/v1alpha1`: `applications`, `applicationsets`,
+`appprojects`. Row = sync + health (đúng printer column upstream).
+
+**Files** — `internal/lens/builtin/argocd.yaml`, `internal/mock/lens.go`.
+
+Action: **sync** ghi `.operation` top-level (Application không có status
+subresource, một `update` là đủ); **refresh** annotate
+`argocd.argoproj.io/refresh: normal|hard`; **terminate** set
+`.status.operationState.phase = Terminating`; **rollback** = sync với revision
+lấy từ `.status.history[]`.
+
+Từ chối sync khi `.operation != nil` và khi `.spec.syncPolicy.automated` bật.
+**KHÔNG hardcode `-n argocd`** — apps-in-any-namespace GA từ 2.5, list toàn
+cluster, key theo `<ns>/<name>`.
+
+🔴 Modal sync phải nói thẳng: ghi `.operation` **đi vòng qua `argocd-rbac-cm`**.
+Policy đó do `argocd-server` enforce; update thẳng lên CR thì Argo không thấy.
+
+**Accept** — [ ] sync ghi đúng shape `.operation` · [ ] đang có operation →
+từ chối, message `ErrAnotherOperationInProgress` · [ ] modal chứa cảnh báo RBAC ·
+[ ] row đọc được app ở namespace bất kỳ · [ ] `resourceHealthSource: appTree` →
+cột health per-resource để trống kèm ghi chú, không phải để trống câm.
+
+---
+
+## T32 — lens: cnpg
+
+**Effort** M · **Deps** T30 · **Lane** F
+
+**Goal** — `postgresql.cnpg.io/v1`: `clusters`, `backups`, `scheduledbackups`,
+`poolers`. Row = `readyInstances/instances` + `currentPrimary` + phase.
+
+**Files** — `internal/lens/builtin/cnpg.yaml`, `internal/mock/lens.go`.
+
+Action một annotation hoặc một status patch: **fence**
+(`cnpg.io/fencedInstances`, chuỗi JSON array — `'["pg-1"]'`, `"*"` = cả cluster),
+**hibernate** (`cnpg.io/hibernation: on|off`), **restart**
+(`kubectl.kubernetes.io/restartedAt`), **reload** (`cnpg.io/reloadedAt`),
+**backup** (tạo `Backup` CR), **promote** (patch `clusters/status`,
+conflict-retry).
+
+Backup recency **không** lấy từ `.status.lastSuccessfulBackup` — cả họ field đó
+deprecated vì backup chuyển sang plugin CNPG-I. Tính từ `Backup` CR
+(`.status.stoppedAt`, `.status.phase`).
+
+**KHÔNG** scrape port 8000: từ 1.30 endpoint nhạy cảm của instance-manager đòi
+client cert ECDSA ghim sẵn của operator.
+
+**Accept** — [ ] fence ghi đúng chuỗi JSON array · [ ] promote patch
+`/status` và retry khi conflict · [ ] phase ngoài `"Cluster in healthy state"`
+đều là warn · [ ] backup age lấy từ `Backup` CR.
+
+---
+
+## T33 — lens: longhorn
+
+**Effort** L · **Deps** T30 · **Lane** F
+
+**Goal** — `longhorn.io/v1beta2` (`v1beta1` đã bị xoá ở 1.10.0). Khai báo **bốn**
+kind, không phải 25: `volumes`, `nodes`, `backups`, `snapshots`.
+
+**Files** — `internal/lens/builtin/longhorn.yaml`, `internal/mock/lens.go`.
+
+Row volume = `state` + `robustness` + `currentNodeID` +
+`.status.kubernetesStatus.{pvcName,workloadsStatus[]}` — backref tới workload
+đang thực sự dùng đĩa, thứ kubectl không cho.
+
+Action khai báo được: snapshot (tạo `Snapshot` CR, `spec.createSnapshot: true`),
+backup (tạo `Backup` CR — 🔴 **bắt buộc label `longhorn.io/backup-volume: <vol>`**,
+controller select theo nó), attach/detach (patch `spec.attachmentTickets` trên
+`VolumeAttachment` CR — CR này **trùng tên với volume**), replica count, node
+scheduling.
+
+**KHÔNG** làm: trim, salvage, snapshot-revert, engine upgrade. Chúng chỉ có trên
+HTTP API `:9500`, mà `networkPolicies.restrictInternalTraffic` mặc định chặn ở
+1.12 và API đó **không có auth riêng**. Mọi action trong lens thừa hưởng RBAC của
+kubeconfig và vào audit log — đáng giá hơn bốn cái nút.
+
+Quy mô là ràng buộc thật: 1 volume = 1 Volume + 1–2 Engine + N Replica + 1
+VolumeAttachment + một Snapshot CR mỗi snapshot (kể cả snapshot hệ thống). 500
+volume ⇒ 10k+ object. Informer, không poll-list. Select replica theo label
+`longhornvolume: <name>`. Snapshot view mặc định lọc `userCreated: true`.
+**KHÔNG hardcode `longhorn-system`** — discover qua DaemonSet.
+
+**Accept** — [ ] backup CR có label bắt buộc · [ ] detach xoá đúng ticket của
+mình, không đụng ticket csi-attacher · [ ] snapshot view mặc định chỉ
+`userCreated` · [ ] namespace lấy từ discovery · [ ] test 500 volume không mở
+LIST nào ngoài informer.
+
+---
+
+## T34 — lens: kargo
+
+**Effort** M · **Deps** T30 · **Lane** F
+
+**Goal** — `kargo.akuity.io/v1alpha1`: `stages`, `freights`, `promotions`,
+`warehouses`.
+
+**Files** — `internal/lens/builtin/kargo.yaml`, `internal/mock/lens.go`.
+
+⚠️ `Stage.status.currentFreight` và `Stage.status.phase` **không tồn tại**. Dùng
+`.status.freightSummary` (sinh ra để làm cột bảng) + `.status.health.status`.
+`Freight` **không có `spec`** — `alias`, `origin`, `commits`, `images` nằm top-level.
+
+Action: **promote** tạo `{generateName: promo-, spec:{stage, freight}}` rồi để
+mutating webhook bơm `spec.steps` — **KHÔNG dựng steps phía client**. **approve
+freight** là status patch trên `freights/status`, không phải annotation.
+**refresh** / **abort** / **re-verify** là annotation.
+
+🔴 Promote: validating webhook gửi SubjectAccessReview cho verb ảo **`promote`**
+trên `stages`. `create` trên `promotions` **không đủ**. Lỗi về dưới dạng webhook
+rejection lúc create — hiện nguyên văn message.
+
+Tên Promotion là `<stage>.<ULID>.<hash>` → sort lexical = sort thời gian, miễn phí.
+`Project` là cluster-scoped, reconcile ra namespace cùng tên có label
+`kargo.akuity.io/project: "true"` — đó là project picker.
+
+**Accept** — [ ] promote gửi đúng object tối thiểu, không có `spec.steps` ·
+[ ] webhook reject hiện nguyên văn · [ ] approve dùng `freights/status` · [ ] cột
+Stage đọc `freightSummary` · [ ] promotion sort theo tên ra đúng thứ tự thời gian.
+
+---
+
+## T35 — lens: traefik
+
+**Effort** M · **Deps** T30 · **Lane** F
+
+**Goal** — `traefik.io/v1alpha1` (group `traefik.containo.us` đã bị xoá ở v3):
+`ingressroutes`, `middlewares`, `traefikservices`.
+
+**Files** — `internal/lens/builtin/traefik.yaml`, `internal/k8s/traefikapi.go`.
+
+🔴 **CRD của Traefik không có `.status`.** Không phải mỏng — không có. Không
+condition, không event, không printer column; ClusterRole chỉ `get,list,watch`.
+View dựng trên k8s API chỉ hiện lại được spec.
+
+Tín hiệu có giá trị duy nhất — *IngressRoute của bạn `disabled` vì match rule
+sai* — chỉ nằm ở HTTP API (`/api/http/routers`: `status` là
+`enabled|disabled|warning`, `error[]` nói lý do). Trong Helm chart chính thức API
+đó **không lộ ra ngoài pod** (`ingressRoute.dashboard.enabled: false`,
+`expose.default: false`, không có Service port 8080).
+
+Nên: mặc định spec-only. **Router inspector là opt-in**, port-forward API rồi
+join row CRD với router sống theo quy ước tên `<ns>-<name>-<hash>@kubernetescrd`.
+Không có API → degrade về spec-only, không phải báo lỗi.
+
+Card này **không phải** headline feature và card này nói thẳng như vậy. Muốn view
+ingress hạng nhất thì làm Gateway API (T37, xem `lenses.md`): nó có đúng thứ
+Traefik CRD thiếu, và một lens phủ luôn Istio + Envoy Gateway + Cilium.
+
+**Accept** — [ ] không có API → spec-only, không lỗi · [ ] có port-forward →
+join đúng router, hiện `disabled` + `error[]` · [ ] join fail (hash lạ) → ô rỗng,
+không đoán bừa.
+
+---
+
+## T36 — edges: điều hướng quan hệ
+
+**Effort** L · **Deps** T31, T32, T33 · **Lane** F
+
+**Goal** — `edges[]` trong lens: `via` là `label` | `ownerRef` | `annotation` |
+`field`. Điều hướng hai chiều: từ pod đi **lên** CNPG Cluster, **ngang** sang
+Backup mới nhất, **xuống** PVC, ngang tiếp sang Longhorn Volume, rồi tới node
+đang giữ replica degraded.
+
+**Files** — `internal/lens/edges.go`, `internal/ui/treeview.go`.
+
+Bảng edge phải là **data**, không hardcode ownerRef — ownerRef không diễn đạt
+được hop nào ở trên. Headlamp kết luận y hệt và cho plugin định nghĩa quan hệ
+Map từ v0.45. k9s XRay chỉ đi xuống (deploy→rs→pod); đi lên và đi ngang là đất
+chưa ai chiếm trong terminal UI.
+
+Resolve edge **lazy**, chỉ khi user mở panel quan hệ. Chặn độ sâu render
+(TraefikService tham chiếu TraefikService đệ quy được).
+
+**Accept** — [ ] mỗi `via` một test · [ ] chuỗi pod→cluster→pvc→volume đi được
+cả hai chiều · [ ] edge trỏ tới kind chưa load → hiện "chưa load", không tự mở
+watch · [ ] cycle không treo UI.
 
 ---
 

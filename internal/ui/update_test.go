@@ -9,10 +9,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 
-	"github.com/p10node/k10s/internal/config"
-	"github.com/p10node/k10s/internal/mock"
-	"github.com/p10node/k10s/internal/update"
-	"github.com/p10node/k10s/internal/version"
+	"github.com/0x01001011/k10s/internal/config"
+	"github.com/0x01001011/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/update"
+	"github.com/0x01001011/k10s/internal/version"
 )
 
 // newerRelease is what a check that found something returns.

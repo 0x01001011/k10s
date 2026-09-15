@@ -92,8 +92,8 @@ Do these before any post. They cost minutes and change every impression.
       and cautious engineers will not touch it.~~ Apache-2.0, matching
       Kubernetes, Helm and k9s.
 - [x] **Module path.** ~~`go.mod` says `module k10s`, so
-      `go install github.com/p10node/k10s@latest` cannot work.~~ Renamed to
-      `github.com/p10node/k10s`, which unlocks the one install command Go
+      `go install github.com/0x01001011/k10s@latest` cannot work.~~ Renamed to
+      `github.com/0x01001011/k10s`, which unlocks the one install command Go
       people expect to paste. Changing it again after launch would break every
       importer, so it is now fixed.
 - [ ] **Tag `v0.1.0`.** `just tag v0.1.0` publishes cross-platform binaries.

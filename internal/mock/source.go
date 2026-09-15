@@ -5,10 +5,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // Source is the offline demo backend: it implements domain.Source entirely
@@ -19,6 +20,9 @@ type Source struct {
 	cordoned  map[string]bool
 	resources []resourceDef
 	nodes     []node
+	// lensAcks maps a pretend controller's token to when it will admit to
+	// having handled the request.
+	lensAcks map[string]time.Time
 }
 
 // New returns a demo Source. ctx selects the starting context (by name or
@@ -36,6 +40,11 @@ func New(ctx string) *Source {
 				break
 			}
 		}
+	}
+	// Lens kinds are discovery-gated in the real backend, so the demo gates
+	// them too — on one context, not on all of them.
+	if contexts[s.ctxIdx] == lensDemoContext {
+		s.resources = append(s.resources, lensResourceDefs()...)
 	}
 	return s
 }
@@ -131,11 +140,13 @@ func (s *Source) Namespaces() []string {
 }
 
 func (s *Source) SwitchContext(name string) (domain.Source, error) {
-	ns := New(name)
+	// The next context is resolved BEFORE building, not patched in after:
+	// New decides which kinds exist from the context it is given, so setting
+	// ctxIdx afterwards would land on a Source built for the wrong one.
 	if name == "" {
-		ns.ctxIdx = (s.ctxIdx + 1) % len(contexts)
+		name = contexts[(s.ctxIdx+1)%len(contexts)]
 	}
-	return ns, nil
+	return New(name), nil
 }
 
 func nameColIndex(r *resourceDef) int {

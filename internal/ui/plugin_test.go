@@ -12,8 +12,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/p10node/k10s/internal/mock"
-	"github.com/p10node/k10s/internal/plugin"
+	"github.com/0x01001011/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/plugin"
 )
 
 func ctrlL() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyCtrlL} }

@@ -16,12 +16,12 @@ import (
 
 	"github.com/hinshun/vt10x"
 
-	"github.com/p10node/k10s/internal/ai"
-	"github.com/p10node/k10s/internal/config"
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/plugin"
-	"github.com/p10node/k10s/internal/theme"
-	"github.com/p10node/k10s/internal/update"
+	"github.com/0x01001011/k10s/internal/ai"
+	"github.com/0x01001011/k10s/internal/config"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/plugin"
+	"github.com/0x01001011/k10s/internal/theme"
+	"github.com/0x01001011/k10s/internal/update"
 )
 
 type focusPane int
@@ -79,8 +79,31 @@ type confirmState struct {
 	// you something, so it gets one button and dismissing it isn't a
 	// "cancelled" anything.
 	notice bool
-	onOK   func(*Model) tea.Cmd
+	// typed, when set, is the word that must be typed before Enter does
+	// anything. It exists for writes no controller can undo — fencing a
+	// Postgres primary, rolling an Application back to an old revision —
+	// where "Enter, Enter" muscle memory is exactly the failure to prevent.
+	typed string
+	// ask, when set, labels a free-text field whose answer the action needs
+	// — which CNPG instance to promote, which revision to roll back to.
+	// Unlike typed there is no expected value, only a non-empty one.
+	ask  string
+	buf  string
+	onOK func(*Model) tea.Cmd
 }
+
+// armed reports whether Enter may fire. A plain confirm is always armed; a
+// typed one only once the word matches exactly; a question only once it has
+// an answer.
+func (c *confirmState) armed() bool {
+	if c.ask != "" {
+		return strings.TrimSpace(c.buf) != ""
+	}
+	return c.typed == "" || c.buf == c.typed
+}
+
+// entry reports whether this modal owns the keyboard as a text field.
+func (c *confirmState) entry() bool { return c.typed != "" || c.ask != "" }
 
 type aiConfig struct {
 	provider int // index into ai.Providers
@@ -181,6 +204,34 @@ type Model struct {
 	hoverAct string
 	flashAct string
 	flashGen int
+
+	// Lens verbs for the selected row, memoised by kind|namespace|name.
+	// Listing them reads the informer cache and evaluates each action's
+	// preconditions, which is cheap but not free — and View runs on every
+	// keystroke, while the selection changes far less often.
+	lensSpecs []domain.LensActionSpec
+	lensKey   string
+	// The instance a lens action was aimed at (a CNPG pod, an ArgoCD
+	// revision), and the outstanding wait for a controller to acknowledge.
+	lensSel string
+	// lensSelKey is the row the instance was named for. Without it the
+	// answer leaks onto the next row, which is how you fence the wrong
+	// cluster with no prompt.
+	lensSelKey string
+	lensAck    *lensAckState
+	// lensSeq numbers write requests so a superseded one's reply cannot
+	// clear the spinner belonging to a newer one.
+	lensSeq int
+	// rowAnchor is "namespace/name" of the object under the cursor. Lens
+	// tables sort worst-first, so an unrelated status change reorders them
+	// under a purely positional rowIdx.
+	rowAnchor string
+	// lensErrSeen keeps a broken-pack report to one toast per session.
+	lensErrSeen bool
+	// The text a typed or free-text confirm modal was holding when it was
+	// confirmed. Read by the onOK closure, which runs after the modal has
+	// already been cleared.
+	confirmAnswer string
 
 	// Which kind to return to after the namespace chooser — you usually
 	// want the view you left, not pods.
@@ -900,6 +951,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.anim++
+		// A repaint is where a re-sorted table becomes visible, so it is
+		// also where the cursor has to be put back on its object.
+		m.reanchorRow()
+		m.noticeLensErr()
+		// Preconditions are read off a cached object that the informer keeps
+		// updating; dropping the memo each tick keeps a disabled reason from
+		// outliving the state that caused it.
+		m.lensKey = ""
 		return m, m.repaintTick()
 
 	case flashDoneMsg:
@@ -916,6 +975,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.showText(msg.title, msg.body)
 		return m, nil
+
+	case lensDoneMsg:
+		return m, m.handleLensDone(msg)
+
+	case lensAckMsg:
+		return m, m.handleLensAck(msg)
 
 	case actionResultMsg:
 		m.busy = false
@@ -1192,9 +1257,37 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// confirm modal captures everything
 	if m.confirm != nil {
 		notice := m.confirm.notice
+		// A typed confirm is a text field, so every letter belongs to the
+		// word being typed. "y" cannot stay a shortcut here — the word to
+		// type usually contains one.
+		if m.confirm.entry() {
+			switch key {
+			case "enter":
+				if !m.confirm.armed() {
+					if m.confirm.ask != "" {
+						m.toast = m.confirm.ask
+					} else {
+						m.toast = "type " + m.confirm.typed + " to confirm"
+					}
+					return nil
+				}
+			case "esc":
+			case "backspace":
+				if b := []rune(m.confirm.buf); len(b) > 0 {
+					m.confirm.buf = string(b[:len(b)-1])
+				}
+				return nil
+			default:
+				if r := []rune(key); len(r) == 1 {
+					m.confirm.buf += key
+				}
+				return nil
+			}
+		}
 		switch key {
 		case "enter", "y", "Y":
 			cb := m.confirm.onOK
+			m.confirmAnswer = strings.TrimSpace(m.confirm.buf)
 			m.confirm = nil
 			if cb != nil {
 				return cb(m)
@@ -1474,6 +1567,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.themeIdx = (m.themeIdx - 1 + len(m.themes)) % len(m.themes)
 		m.toast = "theme → " + m.th().Name
 		m.saveConfig()
+	case "R":
+		return m.showRelated()
 	case "z":
 		m.setZoomed(!m.zoomed)
 		m.toast = map[bool]string{true: "zoomed", false: "restored"}[m.zoomed]
@@ -1517,6 +1612,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			if a.Key == key {
 				return m.fireAction(a)
 			}
+		}
+		// Lens verbs are on the digits, and are checked before plugins so a
+		// pack's own actions win on the kind that declares them.
+		if cmd, ok := m.fireLensKey(key); ok {
+			return cmd
 		}
 		if p, ok := m.pluginForKey(key, false); ok {
 			return m.firePlugin(p)
@@ -1874,6 +1974,7 @@ func (m *Model) move(delta int) {
 		_, rows := m.tableData()
 		m.rowIdx = clamp(m.rowIdx+delta, 0, maxi(0, len(rows)-1))
 		m.rowMem[m.curKind().Key] = m.rowIdx
+		m.anchorRow()
 		m.syncScroll()
 	}
 }
@@ -2525,6 +2626,14 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if m.confirm != nil {
 		notice := m.confirm.notice
 		if zone.Get("cf:ok").InBounds(msg) {
+			// Clicking OK must obey the same gate the keyboard does, or the
+			// typed confirmation is one mouse click away from being no
+			// confirmation at all.
+			if !m.confirm.armed() {
+				m.toast = "type " + m.confirm.typed + " to confirm"
+				return nil
+			}
+			m.confirmAnswer = strings.TrimSpace(m.confirm.buf)
 			cb := m.confirm.onOK
 			m.confirm = nil
 			if cb != nil {
@@ -2661,6 +2770,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			m.focus = focusMain
 			m.rowIdx = i
 			m.rowMem[m.curKind().Key] = i
+			m.anchorRow()
 
 			// A second click on the same row within the double-click window
 			// opens it, same as enter.
@@ -2677,6 +2787,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	for _, a := range Actions {
 		if zone.Get("act:" + a.ID).InBounds(msg) {
 			return tea.Batch(m.flashAction(a.ID), m.fireAction(a))
+		}
+	}
+	for _, sp := range m.lensActions() {
+		if zone.Get("lens:" + sp.ID).InBounds(msg) {
+			return tea.Batch(m.flashAction(sp.ID), m.fireLensAction(sp))
 		}
 	}
 	for _, p := range m.availablePlugins() {

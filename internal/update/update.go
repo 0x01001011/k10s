@@ -26,7 +26,7 @@ import (
 // DefaultRepo is the "owner/name" releases come from. Override it per user
 // with $K10S_UPDATE_REPO, or per install with update.repo in the config file
 // — a fork should not have to be recompiled to update itself.
-const DefaultRepo = "p10node/k10s"
+const DefaultRepo = "0x01001011/k10s"
 
 // RepoEnv names the environment override.
 const RepoEnv = "K10S_UPDATE_REPO"

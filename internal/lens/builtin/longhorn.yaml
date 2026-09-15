@@ -1,0 +1,200 @@
+# Longhorn — longhorn.io/v1beta2 only. v1beta1 was removed in 1.10.0.
+#
+# 25 kinds exist; this declares four. The rest are machinery (Engine,
+# Replica, InstanceManager, BackingImageManager, …) that belongs in the
+# relationship panel, not the Resources pane.
+#
+# Scale is the real constraint: one volume is 1 Volume + 1-2 Engines + N
+# Replicas + 1 VolumeAttachment + one Snapshot CR per snapshot, including
+# system and rebuild snapshots. 500 volumes is 10k+ objects, so these are
+# informer-backed and the snapshot view filters to userCreated.
+#
+# Trim, salvage, snapshot-revert and engine upgrade are deliberately
+# absent: they exist only on the :9500 HTTP API, which has no
+# authentication of its own and which
+# networkPolicies.restrictInternalTraffic blocks by default in 1.12.
+# Everything here inherits kubeconfig RBAC and lands in the audit log.
+name: longhorn
+requires:
+  - longhorn.io/v1beta2
+
+severities:
+  volume-state:
+    ok: [attached, detached]
+    warn: [creating, attaching, detaching]
+    error: [deleting]
+    default: unknown
+  robustness:
+    ok: [healthy]
+    warn: [degraded]
+    error: [faulted]
+    default: unknown
+  backup-state:
+    ok: [Completed]
+    warn: [Pending, InProgress]
+    error: [Error]
+    default: unknown
+  node-ready:
+    ok: ["True"]
+    error: ["False"]
+    default: unknown
+
+kinds:
+  - key: lh-volumes
+    name: LH Volumes
+    short: lhv
+    group: Longhorn
+    gvr: longhorn.io/v1beta2/volumes
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: STATE, path: .status.state, severity: volume-state}
+      - {header: ROBUSTNESS, path: .status.robustness, severity: robustness}
+      - {header: SIZE, path: .spec.size, format: bytes}
+      - {header: NODE, path: .status.currentNodeID}
+      # The backref kubectl cannot give you: which workload is actually
+      # using this disk.
+      - {header: PVC, path: .status.kubernetesStatus.pvcName}
+      - {header: WORKLOAD, path: ".status.kubernetesStatus.workloadsStatus[*].workloadName"}
+      - {header: ENGINE, path: .spec.dataEngine}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions:
+      - describe
+      - yaml
+      - lh-snapshot
+      - lh-backup
+      - lh-detach
+      - edit
+
+  - key: lh-nodes
+    name: LH Nodes
+    short: lhn
+    group: Longhorn
+    gvr: longhorn.io/v1beta2/nodes
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: READY, path: '.status.conditions[?(@.type=="Ready")].status', severity: node-ready}
+      - {header: SCHEDULABLE, path: .spec.allowScheduling, format: bool}
+      - {header: EVICTING, path: .spec.evictionRequested, format: bool}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, lh-node-disable, lh-node-enable, edit]
+
+  - key: lh-backups
+    name: LH Backups
+    short: lhb
+    group: Longhorn
+    gvr: longhorn.io/v1beta2/backups
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: STATE, path: .status.state, severity: backup-state}
+      - {header: PROGRESS, path: .status.progress, format: int}
+      - {header: SIZE, path: .status.size, format: bytes}
+      - {header: CREATED, path: .status.backupCreatedAt, format: age}
+      - {header: ERROR, path: .status.error}
+    actions: [describe, yaml, delete]
+
+  - key: lh-snapshots
+    name: LH Snapshots
+    short: lhs
+    group: Longhorn
+    gvr: longhorn.io/v1beta2/snapshots
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: VOLUME, path: .spec.volume}
+      - {header: READY, path: .status.readyToUse, format: bool}
+      - {header: USER, path: .status.userCreated, format: bool}
+      - {header: SIZE, path: .status.size, format: bytes}
+      - {header: CREATED, path: .status.creationTime, format: age}
+    actions: [describe, yaml, delete]
+
+actions:
+  - id: lh-snapshot
+    label: Take snapshot
+    verb: create
+    template:
+      apiVersion: longhorn.io/v1beta2
+      kind: Snapshot
+      metadata:
+        generateName: "{{.Name}}-k10s-"
+        namespace: "{{.Namespace}}"
+      spec:
+        volume: "{{.Name}}"
+        createSnapshot: true
+
+  # The label is mandatory, not decoration: Longhorn's controllers select
+  # backups by it, and one created without it is never reconciled.
+  # spec.snapshotName must name an existing snapshot — creating a Backup
+  # does not snapshot for you, unlike the HTTP action.
+  - id: lh-backup
+    label: Back up snapshot
+    verb: create
+    confirm: "true"
+    # spec.snapshotName must be an existing SNAPSHOT, never the volume's own
+    # name, so .Selected cannot fall back to it.
+    requiresSelection: true
+    template:
+      apiVersion: longhorn.io/v1beta2
+      kind: Backup
+      metadata:
+        generateName: "{{.Name}}-k10s-"
+        namespace: "{{.Namespace}}"
+        labels:
+          longhorn.io/backup-volume: "{{.Name}}"
+      spec:
+        snapshotName: "{{.Selected}}"
+
+  # The VolumeAttachment CR is named identically to the Volume, so this is
+  # a patch on a different kind with the same name — that is what target is
+  # for. Clearing only our own ticket leaves the csi-attacher's alone.
+  - id: lh-detach
+    label: Release k10s attachment
+    verb: patch
+    confirm: "true"
+    target: longhorn.io/v1beta2/volumeattachments
+    patch:
+      spec:
+        attachmentTickets:
+          k10s: null
+
+  - id: lh-node-disable
+    label: Disable scheduling
+    verb: patch
+    confirm: "true"
+    patch:
+      spec:
+        allowScheduling: false
+
+  - id: lh-node-enable
+    label: Enable scheduling
+    verb: patch
+    patch:
+      spec:
+        allowScheduling: true
+
+edges:
+  # PVC to the volume actually backing it, and from there to the replicas
+  # and the nodes holding them. Walking down to a degraded replica's node
+  # is the payoff.
+  - from: longhorn.io/v1beta2/volumes
+    to: v1/persistentvolumeclaims
+    via: field
+    key: .status.kubernetesStatus.pvcName
+  - from: longhorn.io/v1beta2/replicas
+    to: longhorn.io/v1beta2/volumes
+    via: label
+    key: longhornvolume
+  - from: longhorn.io/v1beta2/engines
+    to: longhorn.io/v1beta2/volumes
+    via: label
+    key: longhornvolume
+  - from: longhorn.io/v1beta2/snapshots
+    to: longhorn.io/v1beta2/volumes
+    via: field
+    key: .spec.volume
+  - from: longhorn.io/v1beta2/backups
+    to: longhorn.io/v1beta2/volumes
+    via: label
+    key: longhorn.io/backup-volume

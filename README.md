@@ -68,7 +68,7 @@ including a CrashLoopBackOff to poke at. It is **opt-in**, because sample
 data should never be mistaken for your machine.
 
 ```bash
-git clone https://github.com/p10node/k10s && cd k10s
+git clone https://github.com/0x01001011/k10s && cd k10s
 go run . demo     # the sample cluster - fake data, clearly labelled
 go run .          # your real cluster, or "No cluster" if there isn't one
 ```
@@ -90,7 +90,7 @@ another context, `/setup` has the kubectl and kubeconfig links.
 ## Install
 
 ```bash
-curl -fsSL https://p10node.com/k10s/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/install.sh | sh
 ```
 
 macOS and Linux, `amd64` and `arm64`. It picks the right prebuilt binary,
@@ -103,20 +103,20 @@ along with how to read it before you run it and the matching
 With Go on the box:
 
 ```bash
-go install github.com/p10node/k10s@latest
+go install github.com/0x01001011/k10s@latest
 ```
 
 Or from a clone, which also stamps the version into the binary:
 
 ```bash
-git clone https://github.com/p10node/k10s && cd k10s
+git clone https://github.com/0x01001011/k10s && cd k10s
 just install                 # → $GOBIN/k10s, version-stamped
 ```
 
 Prebuilt static binaries for **darwin/amd64, darwin/arm64, linux/amd64,
 linux/arm64 and windows/amd64** are published on every tag — Windows is the
 one platform the installer script sends to the
-[release page](https://github.com/p10node/k10s/releases) instead. Every later
+[release page](https://github.com/0x01001011/k10s/releases) instead. Every later
 upgrade is just:
 
 ```bash

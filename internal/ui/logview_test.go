@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/mock"
-	"github.com/p10node/k10s/internal/theme"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/theme"
 )
 
 // openLogs drives the real log-open path and resolves its async command.

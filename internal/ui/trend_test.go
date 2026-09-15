@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/mock"
 )
 
 func TestTrendFirstReadingIsBaseline(t *testing.T) {

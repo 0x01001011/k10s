@@ -18,9 +18,9 @@ import (
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/muesli/termenv"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/mock"
-	"github.com/p10node/k10s/internal/ui"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/ui"
 )
 
 var special = map[string]tea.KeyType{
@@ -56,7 +56,10 @@ func main() {
 	zone.NewGlobal()
 	defer zone.Close()
 
-	var m tea.Model = ui.New(mock.New(""))
+	// The demo gates its lens kinds on one context, the same way the real
+	// backend gates them on discovery — so rendering them headlessly needs a
+	// way to say which context to start on.
+	var m tea.Model = ui.New(mock.New(os.Getenv("K10S_SHOT_CONTEXT")))
 	// The no-cluster screen has no demo data behind it by definition, so it
 	// is built the way main.go builds the real thing: a startup model whose
 	// Connect fails. Init's connect command is run through drain, which

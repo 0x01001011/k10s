@@ -158,7 +158,7 @@ verifies against — changing either means changing `internal/update/assets.go`
 with it. `docs/update.md` has the details, and the `RealDist` test above is
 what catches a mismatch.
 
-Releases are looked for in `p10node/k10s` (`update.DefaultRepo` in
+Releases are looked for in `0x01001011/k10s` (`update.DefaultRepo` in
 `internal/update/update.go`). Until the first tag is pushed, `/update`
 reports that the repo has no published releases — that is the expected
 answer, not a failure.

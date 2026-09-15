@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/p10node/k10s/internal/config"
+	"github.com/0x01001011/k10s/internal/config"
 )
 
 // One settings modal covering what is persisted to ~/.k10s/config.yaml and

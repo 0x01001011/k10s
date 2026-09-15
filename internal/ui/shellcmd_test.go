@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 // run drives one typed line all the way through: the command runs off the

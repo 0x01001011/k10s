@@ -11,7 +11,7 @@ commit := `git rev-parse --short HEAD 2>/dev/null || echo none`
 date := `date -u +%Y-%m-%d`
 
 # What -ldflags carries: the version stamp read by internal/version.
-stamp := "-X github.com/p10node/k10s/internal/version.Version=" + version + " -X github.com/p10node/k10s/internal/version.Commit=" + commit + " -X github.com/p10node/k10s/internal/version.Date=" + date
+stamp := "-X github.com/0x01001011/k10s/internal/version.Version=" + version + " -X github.com/0x01001011/k10s/internal/version.Commit=" + commit + " -X github.com/0x01001011/k10s/internal/version.Date=" + date
 
 # Platforms `just release` builds for.
 platforms := "darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64"

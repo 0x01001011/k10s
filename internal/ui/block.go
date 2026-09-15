@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/p10node/k10s/internal/theme"
+	"github.com/0x01001011/k10s/internal/theme"
 )
 
 // Block is a fixed-size rectangle of terminal cells. Every line is padded to

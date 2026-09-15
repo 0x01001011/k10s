@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/p10node/k10s/internal/config"
+	"github.com/0x01001011/k10s/internal/config"
 	"sigs.k8s.io/yaml"
 )
 
