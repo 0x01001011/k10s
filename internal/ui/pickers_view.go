@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/theme"
 )
@@ -17,7 +16,7 @@ func saveButton(th theme.Theme, id string, focused bool) (rendered, plain string
 	if focused {
 		st = lipgloss.NewStyle().Background(th.Accent).Foreground(th.Bg).Bold(true)
 	}
-	return zone.Mark(id, st.Render(plain)), plain
+	return markZone(id, st.Render(plain)), plain
 }
 
 // ---- theme picker --------------------------------------------------------
@@ -78,7 +77,7 @@ func (m *Model) overlayThemePicker(root Block) Block {
 		if i == m.themeOrig {
 			row += st(th.Subtle).Render("  current")
 		}
-		body = append(body, zone.Mark(fmt.Sprintf("thm:%d", i), padBG(row, inner, bg)))
+		body = append(body, markZone(fmt.Sprintf("thm:%d", i), padBG(row, inner, bg)))
 	}
 
 	body = append(body, "", s(th.Border).Render(strings.Repeat("╌", inner)))

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/domain"
 	"github.com/0x01001011/k10s/internal/mock"
@@ -500,11 +499,11 @@ func TestThemeButtonOpensPicker(t *testing.T) {
 
 // clickZone clicks the middle of a named zone, reporting whether it existed.
 func clickZone(m *Model, id string) bool {
-	z := zone.Get(id)
-	if z == nil {
+	z := getZone(id)
+	if !z.ok {
 		return false
 	}
-	x, y := z.StartX, z.StartY
+	x, y := z.x, z.y
 	if x == 0 && y == 0 {
 		return false
 	}

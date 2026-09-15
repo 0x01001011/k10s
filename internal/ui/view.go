@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/domain"
 	"github.com/0x01001011/k10s/internal/plugin"
@@ -23,7 +22,7 @@ func (m *Model) View() string {
 	if m.w < 72 || m.h < 22 {
 		msg := fmt.Sprintf("k10s needs a terminal ≥ 72x22 (currently %dx%d)", m.w, m.h)
 		b := NewBlock(m.w, m.h, th.Bg)
-		return zone.Scan(b.Overlay(BlockOf(len(msg), 1, []string{
+		return scanZones(b.Overlay(BlockOf(len(msg), 1, []string{
 			lipgloss.NewStyle().Background(th.Bg).Foreground(th.Warn).Render(msg),
 		}, th.Bg), (m.w-len(msg))/2, m.h/2).String())
 	}
@@ -58,7 +57,7 @@ func (m *Model) View() string {
 	if m.confirm != nil {
 		root = m.overlayConfirm(root)
 	}
-	return zone.Scan(root.String())
+	return scanZones(root.String())
 }
 
 // ---- header (borderless): identity + cluster totals -----------------------
@@ -1075,7 +1074,7 @@ func (m *Model) viewStatus() Block {
 	// toast that announced it scrolls away, and there is no other place that
 	// keeps saying so.
 	if badge := m.updateBadge(); badge != "" {
-		right = zone.Mark("updbtn", s(th.Accent2).Bold(true).Render(" "+badge+" ")) +
+		right = markZone("updbtn", s(th.Accent2).Bold(true).Render(" "+badge+" ")) +
 			s(th.Border).Render("│ ") + right
 		rightPlain = " " + badge + " │ " + rightPlain
 	}
@@ -1135,7 +1134,7 @@ func (m *Model) overlaySuggestions(root Block, l layout, sug []SlashCommand) Blo
 			gap = 1
 		}
 		row += st(bg).Render(spaces(gap)) + st(th.Subtle).Render(desc) + st(bg).Render(" ")
-		body = append(body, zone.Mark(fmt.Sprintf("sug:%d", i), padBG(row, inner, bg)))
+		body = append(body, markZone(fmt.Sprintf("sug:%d", i), padBG(row, inner, bg)))
 	}
 
 	h := len(body) + 2
@@ -1216,11 +1215,11 @@ func (m *Model) overlayConfirm(root Block) Block {
 		// having no button.
 		okBG = th.Border
 	}
-	ok := zone.Mark("cf:ok", lipgloss.NewStyle().Background(okBG).Foreground(th.Bg).Bold(true).Render(okPlain))
+	ok := markZone("cf:ok", lipgloss.NewStyle().Background(okBG).Foreground(th.Bg).Bold(true).Render(okPlain))
 	btnGap := 2
 	row := ok
 	if noPlain != "" {
-		no := zone.Mark("cf:no", lipgloss.NewStyle().Background(th.Border).Foreground(th.Fg).Render(noPlain))
+		no := markZone("cf:no", lipgloss.NewStyle().Background(th.Border).Foreground(th.Fg).Render(noPlain))
 		row = ok + s(th.Bg).Render(spaces(btnGap)) + no
 	} else {
 		btnGap = 0

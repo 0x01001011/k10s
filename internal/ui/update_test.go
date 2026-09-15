@@ -7,7 +7,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/config"
 	"github.com/0x01001011/k10s/internal/mock"
@@ -372,7 +371,7 @@ func TestUpdateDialogRendersWithinTheFrame(t *testing.T) {
 	// Every Block is padded to exactly w display cells; a modal whose text
 	// overflows would push rows wider and make the whole frame drift.
 	for i, ln := range strings.Split(out, "\n") {
-		if w := lipgloss.Width(zone.Scan(ln)); w != m.w {
+		if w := lipgloss.Width(scanZones(ln)); w != m.w {
 			t.Fatalf("row %d is %d cells wide, want %d", i, w, m.w)
 		}
 	}
