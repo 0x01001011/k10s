@@ -38,7 +38,7 @@ already knows your cluster, namespace and selected object.**
 > and some of them never go upstream at all.
 >
 > Use it if that overlaps with your stack. Otherwise
-> [upstream k10s](https://github.com/0x01001011/k10s) is the one to install —
+> [upstream k10s](https://github.com/p10node/k10s) is the one to install —
 > it is the source of everything described below, and this fork owes it the
 > whole design.
 >
