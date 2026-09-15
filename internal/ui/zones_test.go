@@ -6,6 +6,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 // The zone scanner replaced bubblezone because bubblezone's was quadratic.
@@ -161,6 +164,57 @@ func TestInBounds(t *testing.T) {
 	if (zoneBounds{}).inBounds(at(0, 0)) {
 		t.Error("an unset zone must never be in bounds")
 	}
+}
+
+// Cell text comes from the cluster: pod names, event messages and lens
+// JSONPath columns are arbitrary strings, so a cell can carry CJK or an emoji.
+// Those are wider than their rune count, so padding a cell with %-*s (which
+// counts runes) overshoots and every column after it in that row shifts.
+//
+// This is checked on tableBody's own output rather than on a whole frame,
+// because Panel pads its body lines with padBG, which measures and would
+// truncate an over-wide row back — hiding the misalignment behind a frame that
+// still looks the right size.
+//
+// It matters more since tableBody started telling padBGOf the row width it
+// computed from the layout instead of measuring: that arithmetic is only
+// correct if every cell really is as wide as its column.
+func TestTableRowWithWideRunesKeepsColumnWidth(t *testing.T) {
+	for _, name := range []string{"日本語テストのポッド", "🚀 rocket-pod", "café-ingress"} {
+		t.Run(name, func(t *testing.T) {
+			src := &wideSource{Source: mock.New(""), inject: name}
+			m := newTestModel(t, src)
+			m.jumpToResource("pods")
+
+			const inner = 100
+			for i, ln := range m.tableBody(inner, 20) {
+				if got := lipgloss.Width(ln); got != inner {
+					t.Fatalf("table line %d is %d cells wide, want %d — a cell is not its column's width: %q",
+						i, got, inner, ln)
+				}
+			}
+		})
+	}
+}
+
+// wideSource replaces the first cell of the first row with text whose display
+// width differs from its rune count.
+type wideSource struct {
+	domain.Source
+	inject string
+}
+
+func (w *wideSource) Rows(kind, ns string) ([]string, [][]string) {
+	cols, rows := w.Source.Rows(kind, ns)
+	if len(rows) > 0 && len(rows[0]) > 0 {
+		out := make([][]string, len(rows))
+		copy(out, rows)
+		first := append([]string(nil), rows[0]...)
+		first[0] = w.inject
+		out[0] = first
+		return cols, out
+	}
+	return cols, rows
 }
 
 // paint exists to avoid lipgloss.Style.Render per call. It is only a win if it

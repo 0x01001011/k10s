@@ -738,7 +738,7 @@ func (m *Model) tableBody(inner, rows int) []string {
 	var hdr strings.Builder
 	hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gutter)))
 	for k, ci := range keep {
-		hdr.WriteString(paint(th.Bg, th.Subtle, true, fmt.Sprintf("%-*s", widths[k], trunc(cols[ci], widths[k]))))
+		hdr.WriteString(paint(th.Bg, th.Subtle, true, pad(trunc(cols[ci], widths[k]), widths[k])))
 		if k < len(keep)-1 {
 			hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gap)))
 		}
@@ -800,13 +800,16 @@ func (m *Model) tableBody(inner, rows int) []string {
 			if ci < len(cols) && cols[ci] == "NAMESPACE" {
 				col = th.Accent2
 			}
-			cell := fmt.Sprintf("%-*s", widths[k], trunc(v, widths[k]))
+			// Padded by display width, not rune count: a CJK or emoji cell
+			// is wider than its runes, and a cell wider than its column
+			// pushes the row past the panel it is drawn in.
+			cell := pad(trunc(v, widths[k]), widths[k])
 			switch {
 			case ci < len(cols) && cols[ci] == nameCol && sel:
 				b.WriteString(paint(bg, col, true, cell))
 			case ci < len(metric) && metric[ci] && widths[k] > 2:
 				// Value, then the arrow in the two reserved cells.
-				cell = fmt.Sprintf("%-*s", widths[k]-2, trunc(v, widths[k]-2))
+				cell = pad(trunc(v, widths[k]-2), widths[k]-2)
 				b.WriteString(paint(bg, col, false, cell))
 				b.WriteString(paint(bg, bg, false, " "))
 				b.WriteString(trendGlyph(th, bg, arrowFor(row, ci)))
