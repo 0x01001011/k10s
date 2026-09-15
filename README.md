@@ -391,7 +391,7 @@ author. Try it on `kind` first. The known limits are listed
 
 This fork is downstream of other people's work. In order:
 
-- **[0x01001011/k10s](https://github.com/0x01001011/k10s)** — the source of this
+- **[p10node/k10s](https://github.com/p10node/k10s)** — the source of this
   fork. The panes, the lens mechanism, the demo backend, the headless renderer
   and the docs all originate there. Everything this fork adds is a local
   preference layered on top of that design.
