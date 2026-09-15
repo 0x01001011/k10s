@@ -8,7 +8,6 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.2
 	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
-	github.com/lrstanley/bubblezone v1.0.0
 	github.com/muesli/termenv v0.16.0
 	k8s.io/api v0.36.4
 	k8s.io/apiextensions-apiserver v0.36.4
