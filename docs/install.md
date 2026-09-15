@@ -5,9 +5,9 @@ Four ways in, all landing on the same static binary.
 | Method           | Command                                                            | Notes                                          |
 |------------------|--------------------------------------------------------------------|------------------------------------------------|
 | Installer script | `curl -fsSL https://p10node.com/k10s/install.sh \| sh`             | macOS + Linux, checksum-verified, no Go needed |
-| Go               | `go install github.com/p10node/k10s@latest`                        | needs Go 1.26+                                 |
+| Go               | `go install github.com/0x01001011/k10s@latest`                        | needs Go 1.26+                                 |
 | From a clone     | `just install`                                                     | stamps the version from `git describe`         |
-| Release archive  | download from [releases](https://github.com/p10node/k10s/releases) | the only route on Windows                      |
+| Release archive  | download from [releases](https://github.com/0x01001011/k10s/releases) | the only route on Windows                      |
 
 After the first install, every later upgrade is `k10s update` — the binary
 replaces itself, checksum-verified, and offers to restart. See
@@ -76,7 +76,7 @@ Or skip the script and verify by hand — it does nothing you cannot type:
 
 ```bash
 tag=v0.1.0
-base=https://github.com/p10node/k10s/releases/download/$tag
+base=https://github.com/0x01001011/k10s/releases/download/$tag
 curl -fsSLO $base/k10s_${tag}_darwin_arm64.tar.gz
 curl -fsSL  $base/checksums.txt | shasum -a 256 -c --ignore-missing
 tar xzf k10s_${tag}_darwin_arm64.tar.gz && sudo install -m 755 k10s /usr/local/bin/
@@ -93,8 +93,8 @@ Rules** (Rules → Redirect Rules → Create), one per script:
 
 | If `http.request.uri.path` is in | Then static redirect `301` to                                      |
 |----------------------------------|--------------------------------------------------------------------|
-| `/k10s/install.sh` `/k10s`       | `https://raw.githubusercontent.com/p10node/k10s/main/install.sh`   |
-| `/k10s/uninstall.sh`             | `https://raw.githubusercontent.com/p10node/k10s/main/uninstall.sh` |
+| `/k10s/install.sh` `/k10s`       | `https://raw.githubusercontent.com/0x01001011/k10s/main/install.sh`   |
+| `/k10s/uninstall.sh`             | `https://raw.githubusercontent.com/0x01001011/k10s/main/uninstall.sh` |
 
 Preserve query string: off, in both.
 

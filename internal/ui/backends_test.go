@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/k8s"
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/k8s"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 // The two backends must offer the same resource kinds in the same order:

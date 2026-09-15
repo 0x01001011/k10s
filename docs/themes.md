@@ -41,7 +41,7 @@ Without cloning:
 
 ```bash
 mkdir -p ~/.k10s/themes
-curl -fsSL https://raw.githubusercontent.com/p10node/k10s/main/examples/themes/rose-pine.yaml \
+curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/examples/themes/rose-pine.yaml \
   -o ~/.k10s/themes/rose-pine.yaml
 k10s
 ```
@@ -51,7 +51,7 @@ On Windows PowerShell:
 ```powershell
 New-Item -ItemType Directory -Force "$HOME/.k10s/themes" | Out-Null
 Invoke-WebRequest `
-  https://raw.githubusercontent.com/p10node/k10s/main/examples/themes/rose-pine.yaml `
+  https://raw.githubusercontent.com/0x01001011/k10s/main/examples/themes/rose-pine.yaml `
   -OutFile "$HOME/.k10s/themes/rose-pine.yaml"
 k10s
 ```

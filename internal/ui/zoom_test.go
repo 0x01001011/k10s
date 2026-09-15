@@ -3,8 +3,8 @@ package ui
 import (
 	"testing"
 
-	"github.com/p10node/k10s/internal/config"
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/config"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 // Zooming is a layout choice that should outlive the session, like folding

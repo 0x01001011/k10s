@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 func newStartupModel(t *testing.T, connect func(string) (domain.Source, string)) *Model {

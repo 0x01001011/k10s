@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/p10node/k10s/internal/plugin"
+	"github.com/0x01001011/k10s/internal/plugin"
 )
 
 // availablePlugins returns plugins whose k9s scope names the current kind.

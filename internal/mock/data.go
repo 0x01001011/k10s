@@ -5,7 +5,7 @@
 package mock
 
 import (
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // node is one row of the fake cluster's node list.

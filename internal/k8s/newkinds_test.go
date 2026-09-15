@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 func TestDaemonSetsDoNotAdvertiseScale(t *testing.T) {

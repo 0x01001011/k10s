@@ -11,8 +11,8 @@ import (
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/muesli/termenv"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 func TestMain(m *testing.M) {

@@ -6,7 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // What k10s shows when there is no cluster.
@@ -25,7 +25,7 @@ import (
 // setupDocs is the canonical guide behind the panel's links. Kept as one
 // constant because it is printed in three places (the panel, /setup, the
 // docs page) and they must not drift.
-const setupDocsURL = "https://github.com/p10node/k10s/blob/main/docs/cluster-setup.md"
+const setupDocsURL = "https://github.com/0x01001011/k10s/blob/main/docs/cluster-setup.md"
 
 // demoMode reports whether what is on screen is the built-in demo rather
 // than a cluster. It is read off the backend's own context name, so nothing

@@ -7,8 +7,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 
-	"github.com/p10node/k10s/internal/config"
-	"github.com/p10node/k10s/internal/version"
+	"github.com/0x01001011/k10s/internal/config"
+	"github.com/0x01001011/k10s/internal/version"
 )
 
 // The single settings modal: CLI name and the update check in one place.

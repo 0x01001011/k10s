@@ -1,4 +1,4 @@
-module github.com/p10node/k10s
+module github.com/0x01001011/k10s
 
 go 1.26.0
 

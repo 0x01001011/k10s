@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // Connecting to a cluster is the one startup step that can take arbitrarily

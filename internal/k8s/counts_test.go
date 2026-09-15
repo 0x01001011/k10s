@@ -17,7 +17,7 @@ import (
 
 	"k8s.io/client-go/rest"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // listSpy counts the badge-count requests the sweeper actually sends, which

@@ -5,8 +5,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/theme"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/theme"
 )
 
 func sourceSynced(src domain.Source, kind, namespace string) (supported, synced bool) {

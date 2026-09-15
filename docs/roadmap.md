@@ -63,7 +63,7 @@ undo by accident.
   about who published it. Shipping a public key and checking a cosign or
   minisign signature is the fix, and is worth doing before this is used
   anywhere that matters.
-- **No releases published yet.** Updates come from `p10node/k10s`
+- **No releases published yet.** Updates come from `0x01001011/k10s`
   (`update.DefaultRepo`), but this tree has no tags, so `/update` reports
   "no published releases" until `just tag v0.1.0` pushes one. A fork can
   point elsewhere with `K10S_UPDATE_REPO` / `update.repo`.
@@ -86,8 +86,8 @@ undo by accident.
 
 The backlog now lives in [plan.md](plan.md) as task cards — each one carries
 its own goal, files, design notes and acceptance criteria, so it can be picked
-up (by a person or an agent) without further context. Twenty-six cards across
-four phases:
+up (by a person or an agent) without further context. Thirty-six cards across
+five phases:
 
 - **P0 — trust & correctness.** A kind-cluster e2e suite, a container picker
   (logs currently always read `Containers[0]`, which is the wrong container on
@@ -99,3 +99,7 @@ four phases:
   dashboard, `can-i`, diff-before-apply, Helm.
 - **P3 — security, polish, distribution.** Signature verification, keychain,
   custom keybindings and columns, export, packaging.
+- **P4 — lenses.** One declarative mechanism plus five YAML packs, so ArgoCD,
+  CNPG, Longhorn, Kargo and Traefik get real table rows and real daily
+  actions instead of a three-column Custom Resources list — and relationship
+  navigation across them. Adds no Go dependency. See [lenses.md](lenses.md).

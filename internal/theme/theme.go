@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/0x01001011/k10s/internal/config"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/p10node/k10s/internal/config"
 	"sigs.k8s.io/yaml"
 )
 

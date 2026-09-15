@@ -1,7 +1,7 @@
 #!/bin/sh
 # k10s installer — one prebuilt static binary, checksum-verified.
 #
-#   curl -fsSL https://p10node.com/k10s/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/install.sh | sh
 #
 # Everything it needs is a POSIX shell, curl or wget, and tar. The asset
 # names and checksums.txt format it reads are the ones produced by
@@ -14,7 +14,7 @@
 #   K10S_NO_SUDO=1             --no-sudo          never escalate; use a user dir
 set -eu
 
-REPO="p10node/k10s"
+REPO="0x01001011/k10s"
 BIN="k10s"
 
 VERSION="${K10S_VERSION:-}"
@@ -39,8 +39,8 @@ usage() {
     cat >&2 <<EOF
 ${B}k10s installer${R}
 
-  curl -fsSL https://p10node.com/k10s/install.sh | sh
-  curl -fsSL https://p10node.com/k10s/install.sh | sh -s -- --dir ~/bin
+  curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/0x01001011/k10s/main/install.sh | sh -s -- --dir ~/bin
 
 Options
   --version <tag>   install a specific release (default: the latest)

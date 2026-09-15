@@ -19,7 +19,7 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // Client bundles every handle we need against one kubeconfig context.

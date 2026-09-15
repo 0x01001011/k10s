@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/mock"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/mock"
 )
 
 // ---- k9s-style resource commands ------------------------------------------
