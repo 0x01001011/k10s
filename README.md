@@ -27,6 +27,26 @@ already knows your cluster, namespace and selected object.**
 
 ---
 
+> ### This is a personal fork
+>
+> A fork of [**0x01001011/k10s**](https://github.com/0x01001011/k10s), kept for
+> one person's day-to-day cluster work. It carries the operators, tools and
+> workflow I actually run — the [lens packs](docs/lenses.md) for **ArgoCD,
+> Kargo, Traefik, CloudNativePG and Longhorn**, my own
+> [`plugins.yaml`](docs/plugins.md) shortcuts, [themes](docs/themes.md) and AI
+> provider settings. Things upstream has no reason to carry land here first,
+> and some of them never go upstream at all.
+>
+> Use it if that overlaps with your stack. Otherwise
+> [upstream k10s](https://github.com/0x01001011/k10s) is the one to install —
+> it is the source of everything described below, and this fork owes it the
+> whole design.
+>
+> The fork, its design and every update here were written entirely by
+> [Claude](https://claude.com/claude-code).
+
+---
+
 <div align="center">
 
 <img src="assets/screenshot.png" alt="k10s running in a terminal: resource sidebar, pod table with live status, and an action pane for the selected pod" width="960">
@@ -366,6 +386,26 @@ client-go/kubectl APIs and covered by tests with fake clientsets, but this
 tree has not yet been smoke-tested against a production cluster by its
 author. Try it on `kind` first. The known limits are listed
 [in the roadmap](docs/roadmap.md#known-limits) rather than buried.
+
+## Credits
+
+This fork is downstream of other people's work. In order:
+
+- **[0x01001011/k10s](https://github.com/0x01001011/k10s)** — the source of this
+  fork. The panes, the lens mechanism, the demo backend, the headless renderer
+  and the docs all originate there. Everything this fork adds is a local
+  preference layered on top of that design.
+- **[k9s](https://github.com/derailed/k9s)** by
+  [@derailed](https://github.com/derailed) — the ancestor of both, and the
+  reason a Kubernetes TUI is something you want to open. The command vocabulary
+  and the `plugins.yaml` format are k9s's.
+- **[Charm](https://github.com/charmbracelet)** — Bubble Tea, Lip Gloss,
+  Bubbles — and **[BubbleZone](https://github.com/lrstanley/bubblezone)**, which
+  is the reason any of this is clickable.
+- **[Claude](https://claude.com/claude-code)** — the fork, its design and every
+  change in it were written by Claude, end to end.
+
+Licensing is unchanged: [Apache-2.0](LICENSE), same as upstream.
 
 ## Thanks
 
