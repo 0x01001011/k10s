@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	zone "github.com/lrstanley/bubblezone"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/plugin"
-	"github.com/p10node/k10s/internal/theme"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/plugin"
+	"github.com/0x01001011/k10s/internal/theme"
 )
 
 func (m *Model) View() string {
@@ -431,6 +431,18 @@ func tryFit(cols []string, rows [][]string, keep []int, avail, gap int) ([]int, 
 	return nat, true
 }
 
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 var statusColors = map[string]string{
 	"Running": "ok", "Ready": "ok", "Active": "ok", "Bound": "ok", "True": "ok", "Normal": "ok",
 	"Completed": "subtle", "False": "subtle", "<none>": "subtle", "-": "subtle",
@@ -438,7 +450,24 @@ var statusColors = map[string]string{
 	"CrashLoopBackOff": "err", "Error": "err", "ImagePullBackOff": "err", "Failed": "err", "Evicted": "err",
 }
 
-func cellColor(th theme.Theme, v string, def lipgloss.Color) lipgloss.Color {
+// cellColor picks a cell's colour. level, when non-empty, is a lens pack's
+// declared severity and wins outright: a pack that says Degraded is an error
+// has said so about that exact column, which beats every guess below it.
+//
+// The lens vocabulary is "error"; statusColors says "err". They are kept
+// separate rather than merged, because one table maps VALUES and the other
+// maps LEVELS — collapsing them would silently drop lens errors to default.
+func cellColor(th theme.Theme, level, v string, def lipgloss.Color) lipgloss.Color {
+	switch level {
+	case "ok":
+		return th.Ok
+	case "warn":
+		return th.Warn
+	case "error":
+		return th.Err
+	case "unknown":
+		return th.Subtle
+	}
 	if strings.Contains(v, "SchedulingDisabled") {
 		return th.Warn
 	}
@@ -452,9 +481,11 @@ func cellColor(th theme.Theme, v string, def lipgloss.Color) lipgloss.Color {
 	case "subtle":
 		return th.Subtle
 	}
+	// "1/3" is a ready ratio and deserves a warning. "80/TCP" is a port and
+	// does not — both halves must be numbers before this means anything.
 	if strings.Contains(v, "/") && len(v) <= 7 {
 		parts := strings.SplitN(v, "/", 2)
-		if len(parts) == 2 && parts[0] != parts[1] {
+		if len(parts) == 2 && allDigits(parts[0]) && allDigits(parts[1]) && parts[0] != parts[1] {
 			return th.Warn
 		}
 	}
@@ -732,6 +763,10 @@ func (m *Model) tableBody(inner, rows int) []string {
 	}
 	out := []string{hdr.String(), s(th.Border).Render(strings.Repeat("╌", inner))}
 
+	// Resolved ONCE per frame, not once per cell: the assertion is cheap but
+	// the row loop runs width × height times.
+	level := m.levelFor(m.res().Key)
+
 	visible := rows - 2
 	if visible < 1 {
 		visible = 1
@@ -770,7 +805,11 @@ func (m *Model) tableBody(inner, rows int) []string {
 			if ci < len(row) {
 				v = row[ci]
 			}
-			col := cellColor(th, v, base)
+			lvl := ""
+			if level != nil && ci < len(cols) {
+				lvl = level(cols[ci], v)
+			}
+			col := cellColor(th, lvl, v, base)
 			if ci < len(cols) && cols[ci] == "NAMESPACE" {
 				col = th.Accent2
 			}
@@ -911,6 +950,35 @@ func (m *Model) viewActions(w, h int) Block {
 			st(labCol).Bold(flashed).Render(trunc(label, inner-6))
 		lines = append(lines, m.mark("act:"+a.ID, padBG(row, inner, bg)))
 	}
+	// Lens verbs sit below the builtin actions, under their own rule: they
+	// are the pack's vocabulary, not k10s's, and mixing them into the same
+	// list would make "Sync" look as universal as "Describe".
+	if specs := m.lensActions(); len(specs) > 0 {
+		lines = append(lines, s(th.Border).Render(strings.Repeat("╌", inner)))
+		for i, sp := range specs {
+			k := lensKeyFor(i)
+			if k == "" {
+				break
+			}
+			keyCol, labCol := th.Accent2, th.Fg
+			if sp.Disabled {
+				// Disabled but still listed, and still keyed: pressing it
+				// says why. A vanished button is a mystery.
+				keyCol, labCol = th.Border, th.Subtle
+			}
+			if sp.Confirm == "typed" {
+				keyCol = th.Err
+			}
+			glyph := " "
+			if m.lensAck != nil && m.lensAck.id == sp.ID {
+				glyph = m.lensAckGlyph()
+			}
+			row := s(th.Border).Render(glyph+"[") + s(keyCol).Render(k) + s(th.Border).Render("] ") +
+				s(labCol).Render(trunc(sp.Label, inner-6))
+			lines = append(lines, m.mark("lens:"+sp.ID, padBG(row, inner, th.Bg)))
+		}
+	}
+
 	plugins := m.availablePlugins()
 	if len(plugins) > 0 {
 		lines = append(lines, s(th.Border).Render(strings.Repeat("╌", inner)))
@@ -1118,6 +1186,23 @@ func (m *Model) overlayConfirm(root Block) Block {
 	}
 	body = append(body, "")
 
+	if c.typed != "" {
+		body = append(body,
+			s(th.Subtle).Render("  type "),
+			s(accent).Bold(true).Render("  "+trunc(c.typed, inner-3)),
+			"",
+		)
+		field := c.buf + "▏"
+		col := th.Fg
+		if c.armed() {
+			col = th.Ok
+		}
+		body = append(body,
+			s(th.Border).Render("  ▸ ")+s(col).Render(trunc(field, inner-5)),
+			"",
+		)
+	}
+
 	// A notice has nothing to decline, so it gets one button — offering
 	// "Cancel" against a statement of fact only invites the question of
 	// what cancelling it would do.
@@ -1125,7 +1210,14 @@ func (m *Model) overlayConfirm(root Block) Block {
 	if c.notice {
 		okPlain, noPlain = "  Enter · OK  ", ""
 	}
-	ok := zone.Mark("cf:ok", lipgloss.NewStyle().Background(accent).Foreground(th.Bg).Bold(true).Render(okPlain))
+	okBG := accent
+	if !c.armed() {
+		// Not a decoration: the button is genuinely inert until the word
+		// matches, and looking live while refusing clicks is worse than
+		// having no button.
+		okBG = th.Border
+	}
+	ok := zone.Mark("cf:ok", lipgloss.NewStyle().Background(okBG).Foreground(th.Bg).Bold(true).Render(okPlain))
 	btnGap := 2
 	row := ok
 	if noPlain != "" {

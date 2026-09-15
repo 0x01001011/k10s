@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -16,10 +17,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // Store is the real backend: client-go informers backing live table data,
@@ -75,6 +77,14 @@ type Store struct {
 	// group, or no permission) and when that was learnt, so a locked-down
 	// cluster isn't asked the same forbidden question every 30 seconds.
 	cntGone map[string]time.Time
+
+	// T28 — lenses. The registry is an immutable snapshot published once by
+	// startLensGate, so readers never lock. lensReady is closed once the
+	// gate has run; production never waits on it, only tests do.
+	lensSnap     atomic.Pointer[lensReg]
+	lensReady    chan struct{}
+	dynFactory   dynamicinformer.DynamicSharedInformerFactory
+	dynFactories map[string]dynamicinformer.DynamicSharedInformerFactory
 }
 
 type metricSample struct {
@@ -128,6 +138,8 @@ func newStoreFrom(c *Client, apiext apiextclientset.Interface) (*Store, error) {
 		cntKick:             make(chan struct{}, 1),
 		cntWant:             map[string]time.Time{},
 		cntGone:             map[string]time.Time{},
+		lensReady:           make(chan struct{}),
+		dynFactories:        map[string]dynamicinformer.DynamicSharedInformerFactory{},
 	}
 
 	// No informers are registered here and nothing is awaited: construction
@@ -136,6 +148,10 @@ func newStoreFrom(c *Client, apiext apiextclientset.Interface) (*Store, error) {
 	// fill in. Eagerly listing every kind up front — secrets and events
 	// across all namespaces especially — is what made startup crawl.
 	go s.refreshMetricsLoop()
+	// T28. One aggregated discovery round trip, off the connect path. It
+	// publishes a snapshot — possibly an empty one — and closes lensReady on
+	// every path, so a test can wait for it without caring what it found.
+	go s.startLensGate()
 
 	return s, nil
 }
@@ -245,7 +261,10 @@ func register(factory informers.SharedInformerFactory, apiextFactory apiextinfor
 // LIST/WATCH should use. With no namespace argument, legacy internal callers
 // mean all namespaces; Rows always passes the actual view namespace.
 func (s *Store) desiredInformerScope(kind string, ns []string) string {
-	k := findKind(kind)
+	// s.findKind, not the package-level findKind: a lens kind declaring
+	// namespaced: true would otherwise be silently promoted to a
+	// cluster-wide watch.
+	k := s.findKind(kind)
 	if k == nil || !k.Namespaced {
 		return metav1.NamespaceAll
 	}
@@ -264,7 +283,7 @@ func (s *Store) accessScopeLocked(kind, desired string) string {
 		// LISTs remain unsynced while client-go retries. Reuse only a cache
 		// that actually completed its initial list; otherwise allow the
 		// narrower, authorized namespace informer to start.
-		if inf := register(s.factory, s.apiextFactory, kind); inf != nil && inf.HasSynced() {
+		if inf := s.informerLocked(kind, metav1.NamespaceAll); inf != nil && inf.HasSynced() {
 			return metav1.NamespaceAll
 		}
 	}
@@ -297,7 +316,7 @@ func (s *Store) ensure(kind string, ns ...string) {
 		return
 	}
 	factory := s.factoryLocked(scope)
-	inf := register(factory, s.apiextFactory, kind)
+	inf := s.informerLocked(kind, scope)
 	if inf == nil {
 		return
 	}
@@ -311,9 +330,14 @@ func (s *Store) ensure(kind string, ns ...string) {
 	})
 	s.started[key] = true
 	// Start is idempotent and launches only newly-registered informers.
-	if kind == kCRDs {
+	switch {
+	case kind == kCRDs:
 		s.apiextFactory.Start(s.stop)
-	} else {
+	case s.isLensKindLocked(kind):
+		// Started with s.stop like every other factory, so Close() tears it
+		// down and nothing needs an explicit Shutdown.
+		s.dynFactoryLocked(scope).Start(s.stop)
+	default:
 		factory.Start(s.stop)
 	}
 }
@@ -352,8 +376,7 @@ func (s *Store) SyncedFor(kind, ns string) bool {
 	if !s.started[informerKey{kind: kind, namespace: scope}] {
 		return false
 	}
-	factory := s.factoryLocked(scope)
-	inf := register(factory, s.apiextFactory, kind)
+	inf := s.informerLocked(kind, scope)
 	synced := inf != nil && inf.HasSynced()
 	if synced {
 		// HasSynced means the informer recovered and completed an authoritative
@@ -381,7 +404,7 @@ func (s *Store) LoadErrorFor(kind, ns string) error {
 	if !s.started[key] {
 		return nil
 	}
-	inf := register(s.factoryLocked(scope), s.apiextFactory, kind)
+	inf := s.informerLocked(kind, scope)
 	if inf != nil && inf.HasSynced() {
 		delete(s.loadErr, key)
 		return nil
@@ -483,7 +506,17 @@ func (s *Store) nodeMetric(name string) (metricSample, bool) {
 	return m, ok
 }
 
-func (s *Store) Kinds() []domain.Kind { return Kinds() }
+// Kinds is the builtin list plus whatever the lens gate admitted. Lens kinds
+// are APPENDED, never inserted: internal/ui addresses the selected kind by
+// index, so inserting would move the user's selection under them when the
+// gate lands mid-session.
+func (s *Store) Kinds() []domain.Kind {
+	out := Kinds() // already a fresh copy
+	if r := s.lensSnap.Load(); r != nil {
+		out = append(out, r.order...)
+	}
+	return out
+}
 
 // Ping reports whether there is a cluster behind this store — see
 // Client.Reachable. Nothing here dials: the answer was settled by the single
@@ -670,6 +703,12 @@ func (s *Store) gvrFor(kind string) (schema.GroupVersionResource, bool, error) {
 	}
 	// CRDs / custom resource instances: resolve via discovered CRD by plural
 	// name embedded as "cr:<group>:<version>:<resource>:<namespaced>".
+	// T28. One branch is what makes Describe, YAML, Edit and Delete work on a
+	// lens row: they all resolve through gvrFor and then use the dynamic
+	// client, which lens kinds already speak.
+	if lk, ok := s.lensKindFor(kind); ok {
+		return lk.gvr, lk.kind.Namespaced, nil
+	}
 	if gvr, namespaced, ok := decodeCRGVR(kind); ok {
 		return gvr, namespaced, nil
 	}

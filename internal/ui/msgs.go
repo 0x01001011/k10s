@@ -3,8 +3,8 @@ package ui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/p10node/k10s/internal/domain"
-	"github.com/p10node/k10s/internal/update"
+	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/update"
 )
 
 // IsAsyncMsg reports whether msg is one of this package's own async-result
@@ -15,7 +15,10 @@ import (
 // a self-perpetuating Cmd like textinput's cursor blink.
 func IsAsyncMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case textResultMsg, actionResultMsg, srcConnectedMsg, ctxSwitchMsg, logStartMsg, logOlderMsg, shellStartMsg, editFetchedMsg, editExitMsg, portForwardMsg, updateCheckMsg, updateAppliedMsg:
+	// lensDoneMsg is the write's own result and resolves once. lensAckMsg is
+	// deliberately NOT here: it reschedules itself until the controller
+	// answers, so chasing it headlessly would loop for the whole timeout.
+	case textResultMsg, actionResultMsg, srcConnectedMsg, ctxSwitchMsg, logStartMsg, logOlderMsg, shellStartMsg, editFetchedMsg, editExitMsg, portForwardMsg, updateCheckMsg, updateAppliedMsg, lensDoneMsg:
 		return true
 	}
 	return false

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/p10node/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/domain"
 )
 
 // SlashCommand describes one prompt command for the suggestion popup.
@@ -290,6 +290,10 @@ func Help() string {
     o cordon/uncordon · u drain (nodes only)
     the pane lists only the actions that apply to the selected kind
     D delete (confirm dialog)
+    R related — one hop out, both directions, for kinds a lens pack covers
+    1..9 lens verbs (sync, promote, fence, detach …) on ArgoCD, Kargo, CNPG,
+      Longhorn and Traefik kinds. Disabled ones stay listed and say why;
+      the destructive ones ask you to type the object's name.
     plugins             ~/.k10s/plugins.yaml shortcuts appear in the same pane;
                         built-in keys win unless override: true
 

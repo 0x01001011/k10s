@@ -1,0 +1,79 @@
+# Traefik — traefik.io/v1alpha1. The legacy traefik.containo.us group was
+# removed in v3 and is not supported here.
+#
+# READ THIS BEFORE ADDING A STATUS COLUMN: these CRDs have no .status field
+# at all. Not a thin status — none. No conditions, no events, no printer
+# columns; Traefik's own ClusterRole carries get,list,watch and nothing
+# else on them. Traefik never writes back. Every column below therefore
+# reads spec, and there are no severity tables because there is nothing to
+# grade.
+#
+# The one genuinely valuable signal — your IngressRoute is `disabled`
+# because the match rule is malformed — lives only in Traefik's HTTP API
+# (/api/http/routers), which the official Helm chart does not expose
+# outside the pod. That is the opt-in router inspector in T35, reached
+# through a port-forward the user starts, not a column here.
+#
+# If you want a first-class ingress view, build it on Gateway API instead:
+# gateway.networking.k8s.io/v1 has the rich status these types lack, and
+# one lens would cover Traefik, Istio, Envoy Gateway and Cilium at once.
+name: traefik
+requires:
+  - traefik.io/v1alpha1
+
+kinds:
+  - key: traefik-routes
+    name: IngressRoutes
+    short: ir
+    group: Traefik
+    gvr: traefik.io/v1alpha1/ingressroutes
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: ENTRYPOINTS, path: ".spec.entryPoints[*]"}
+      - {header: MATCH, path: ".spec.routes[*].match"}
+      - {header: SERVICE, path: ".spec.routes[*].services[*].name"}
+      - {header: MIDDLEWARES, path: ".spec.routes[*].middlewares[*].name"}
+      - {header: TLS, path: .spec.tls.secretName}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: traefik-middlewares
+    name: Middlewares
+    short: mw
+    group: Traefik
+    gvr: traefik.io/v1alpha1/middlewares
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: traefik-services
+    name: TraefikServices
+    short: ts
+    group: Traefik
+    gvr: traefik.io/v1alpha1/traefikservices
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: WEIGHTED, path: ".spec.weighted.services[*].name"}
+      - {header: MIRRORING, path: .spec.mirroring.name}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+edges:
+  # A TraefikService may reference another TraefikService recursively, so
+  # whatever renders this must cap depth.
+  - from: traefik.io/v1alpha1/ingressroutes
+    to: v1/services
+    via: field
+    key: .spec.routes[*].services[*].name
+  - from: traefik.io/v1alpha1/ingressroutes
+    to: traefik.io/v1alpha1/middlewares
+    via: field
+    key: .spec.routes[*].middlewares[*].name
+  - from: traefik.io/v1alpha1/ingressroutes
+    to: v1/secrets
+    via: field
+    key: .spec.tls.secretName
