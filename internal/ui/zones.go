@@ -157,32 +157,37 @@ func scanZoneLine(line string, y int, out *strings.Builder, found map[string]zon
 		return
 	}
 
-	// The clean text emitted for this line so far. Width is measured with
-	// ansi.StringWidth over it rather than tracked rune by rune, so escape
-	// sequences are skipped by the same code that measures everywhere else.
-	//
-	// ponytail: O(markers x line) per line. Lines are ~140 cells and carry a
-	// handful of markers; track width incrementally if that ever changes.
-	var clean strings.Builder
-	clean.Grow(len(line))
 	open := map[int]int{} // marker number -> start cell
 
+	// at is the cell the next emitted character lands on. Each emitted run is
+	// measured once and added, rather than re-measuring the whole line prefix
+	// per marker — that re-measuring was 20% of frame time.
+	//
+	// Runs are only ever cut immediately before a marker, so a run never ends
+	// part-way through an escape sequence and ansi.StringWidth sees whole
+	// sequences to skip.
+	at := 0
+	pos := 0  // start of the run not yet emitted
+	from := 0 // where to look for the next marker
+
 	for {
-		i := strings.Index(line, "\x1b[")
+		i := strings.Index(line[from:], "\x1b[")
 		if i < 0 {
 			break
 		}
+		i += from
+
 		n, w, isZone := zoneAt(line[i:])
 		if !isZone {
-			// Ordinary escape: copy it and the text before it, then carry on
-			// past its introducer so the next search does not rematch it.
-			clean.WriteString(line[:i+2])
-			line = line[i+2:]
+			// An ordinary escape (a colour). Leave it in the run and keep
+			// looking past its introducer so it is not rematched.
+			from = i + 2
 			continue
 		}
 
-		clean.WriteString(line[:i])
-		at := ansi.StringWidth(clean.String())
+		run := line[pos:i]
+		out.WriteString(run)
+		at += ansi.StringWidth(run)
 
 		if start, isClose := open[n]; isClose {
 			if id, ok := zoneIDFor(n); ok {
@@ -193,9 +198,9 @@ func scanZoneLine(line string, y int, out *strings.Builder, found map[string]zon
 			open[n] = at
 		}
 
-		line = line[i+w:]
+		pos = i + w
+		from = pos
 	}
 
-	out.WriteString(clean.String())
-	out.WriteString(line)
+	out.WriteString(line[pos:])
 }
