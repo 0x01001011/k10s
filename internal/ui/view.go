@@ -749,6 +749,14 @@ func (m *Model) tableBody(inner, rows int) []string {
 	// the row loop runs width × height times.
 	level := m.levelFor(m.res().Key)
 
+	// Every cell is padded or truncated to its column width, and the metric
+	// columns spend their last two cells on the arrow, so a row's visible
+	// width is known without walking it for escape sequences.
+	rowW := gutter + gap*maxi(0, len(keep)-1)
+	for k := range keep {
+		rowW += widths[k]
+	}
+
 	visible := rows - 2
 	if visible < 1 {
 		visible = 1
@@ -809,7 +817,7 @@ func (m *Model) tableBody(inner, rows int) []string {
 				b.WriteString(paint(bg, bg, false, spaces(gap)))
 			}
 		}
-		out = append(out, m.mark(fmt.Sprintf("row:%d", i), padBG(b.String(), inner, bg)))
+		out = append(out, m.mark(fmt.Sprintf("row:%d", i), padBGOf(b.String(), rowW, inner, bg)))
 	}
 	if len(allRows) == 0 {
 		loadErr := m.kindLoadError()

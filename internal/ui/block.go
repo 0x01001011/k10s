@@ -91,8 +91,14 @@ func pad(s string, w int) string {
 // padBG pads to w using an independently-rendered background run, so we never
 // nest lipgloss styles (a nested reset would drop the outer background).
 func padBG(s string, w int, bg lipgloss.Color) string {
-	d := w - lipgloss.Width(s)
-	switch {
+	return padBGOf(s, lipgloss.Width(s), w, bg)
+}
+
+// padBGOf is padBG for a caller that already knows how wide s is. Measuring a
+// line means an ANSI-aware walk over every escape in it, and the table builds
+// its rows to exact column widths, so it can say.
+func padBGOf(s string, cur, w int, bg lipgloss.Color) string {
+	switch d := w - cur; {
 	case d > 0:
 		return s + paint(bg, "", false, spaces(d))
 	case d < 0:
