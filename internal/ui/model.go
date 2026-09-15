@@ -257,6 +257,13 @@ type Model struct {
 	// anim advances on every repaint tick and drives the loading spinner.
 	anim int
 
+	// kindsMemo holds src.Kinds() for the current frame or message. Kinds()
+	// deep-copies every kind's Cols and Allowed, and kinds() is called
+	// dozens of times per frame (curKind/res go through it), which made it
+	// 11% of the bytes allocated per frame. Cleared at the top of Update and
+	// View, so it is never staler than one frame.
+	kindsMemo []domain.Kind
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -484,7 +491,14 @@ func (m *Model) withThemeWarning(status string) string {
 	return strings.Join(warnings, "   ·   ") + "   ·   " + status
 }
 
-func (m *Model) kinds() []domain.Kind { return m.src.Kinds() }
+// kinds returns the backend's kind list, memoised for the current frame or
+// message. Callers only ever read the result — none sort or append to it.
+func (m *Model) kinds() []domain.Kind {
+	if m.kindsMemo == nil {
+		m.kindsMemo = m.src.Kinds()
+	}
+	return m.kindsMemo
+}
 
 // curKind (aliased as res for brevity at call sites) returns the currently
 // selected kind, by resIdx into the full, unfiltered kind list.
@@ -933,6 +947,9 @@ func (m *Model) visibleRows() int {
 // ---- update ---------------------------------------------------------------
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// A message may be the one that added a kind, so this message sees a
+	// fresh list rather than the previous frame's.
+	m.kindsMemo = nil
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height

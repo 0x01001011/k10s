@@ -14,6 +14,8 @@ import (
 )
 
 func (m *Model) View() string {
+	// One kind list per frame; see Model.kindsMemo.
+	m.kindsMemo = nil
 	if m.w < 10 || m.h < 8 {
 		return ""
 	}
