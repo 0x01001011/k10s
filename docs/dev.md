@@ -118,7 +118,7 @@ Two tests in `internal/ui/block_test.go` guard it without a terminal:
   whose length depends on the title and the tag, so it is checked directly
   across widths, long titles and oversized tags. A title is truncated against
   what the tag leaves behind, and a tag with no room at all is dropped rather
-  than cut (it carries bubblezone markers, so truncating it would corrupt its
+  than cut (it carries zone markers, so truncating it would corrupt its
   click target).
 - `TestLongTextTitleKeepsEveryRowAtTerminalWidth` — the same invariant through
   the real render path: `logs -f <pod>` at 100 columns, every row measured.

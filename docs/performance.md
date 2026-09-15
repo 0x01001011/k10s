@@ -103,6 +103,47 @@ in `perf_test.go`.
 - Pod metrics are only polled once Pods has been opened.
 - Custom-resource sweeps are cached and shared between `Rows` and `RowCount`.
 
+### The frame pays per style, not per cell
+
+Everything above is about not fetching too much. This is about not spending
+too much redrawing what we already have.
+
+`lipgloss.Style.Render` re-resolves both colours from their hex strings and
+re-formats the ANSI escape on every call. A table is ~40 rows × ~8 columns,
+so building a style per cell put `Render` at 43% of the frame.
+
+`paint(bg, fg, bold, text)` renders each colour combination once and reuses
+the escape prefix/suffix. The pair comes from lipgloss' own output, so the
+bytes are identical to what `Render` would have produced — `cmd/shot` was
+used to confirm the frame is byte-for-byte unchanged at every step. Use it
+for single-line text with no border, margin or padding; that is every cell
+and tag, but not a `Panel` frame.
+
+Two more rules fall out of the same idea:
+
+- **Measure once.** `lipgloss.Width` walks every escape in a line. The table
+  builds cells to exact column widths, so it knows its row width from the
+  layout and uses `padBGOf` instead of making `padBG` re-measure.
+- **Ask the backend once per frame.** `src.Kinds()` deep-copies every kind,
+  and `curKind`/`res` go through it to read one element. `Model.kindsMemo`
+  holds it for the frame and is cleared at the top of both `Update` and
+  `View`, so it is never staler than one frame.
+
+### Mouse hit-testing is ours
+
+`internal/ui/zones.go` replaces bubblezone. Its `Scan` removed each marker
+with `input = input[:start] + input[pos:]`, reallocating and copying the
+whole frame once per marker — quadratic in marker count, and 92% of
+everything the UI allocated per frame. v1.0.0 is its only release, so there
+was no version to upgrade to.
+
+The replacement scans one line at a time and rewrites each line once. Every
+mark in the package wraps exactly one line, so nothing is lost. Markers keep
+bubblezone's encoding, the private CSI sequence `ESC [ <n> z`, because that
+is what stops `lipgloss.Width` from counting an id as visible text.
+
+Together these took one frame from 3.04ms and 5.6MB to 0.45ms and 0.38MB.
+
 ## Regression guards
 
 These exist specifically so the above can't silently regress:
@@ -118,6 +159,10 @@ These exist specifically so the above can't silently regress:
 | `TestViewDoesNotBuildRowsForEveryKind`       | the sidebar uses RowCount, not Rows      |
 | `TestKeypressLatency`                        | input stays responsive                   |
 | `TestSilenceLoggingKeepsStderrClean`         | client-go never paints over the TUI      |
+| `TestPaintMatchesLipglossRender`             | the escape cache is a drop-in for Render |
+| `TestScanZonesIgnoresColourEscapes`          | markers and colours stay told apart      |
+| `TestZonesFromThePreviousFrameAreDropped`    | a covered row can't be clicked through   |
+| `BenchmarkView` / `BenchmarkKeypressFrame`   | frame cost, in time and allocations      |
 
 Run them alone with `just test-perf`, or the benchmarks with `just bench`.
 

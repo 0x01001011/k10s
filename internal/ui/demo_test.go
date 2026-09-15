@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/domain"
 	"github.com/0x01001011/k10s/internal/mock"
@@ -85,7 +84,7 @@ func TestDemoIsMarkedOnEveryFrame(t *testing.T) {
 	m, _ := demoModel(t)
 	m.Update(m.runSlash("/demo")())
 
-	v := zone.Scan(m.View())
+	v := scanZones(m.View())
 	if !strings.Contains(v, "DEMO") {
 		t.Errorf("the header does not carry a DEMO marker:\n%s", v)
 	}
@@ -199,7 +198,7 @@ func TestContextPickerLabelsTheDemo(t *testing.T) {
 	m, _ := demoModel(t)
 	m.showContextChooser()
 
-	body := zone.Scan(strings.Join(m.contextBody(110, 30), "\n"))
+	body := scanZones(strings.Join(m.contextBody(110, 30), "\n"))
 	if !strings.Contains(body, "sample data") {
 		t.Errorf("the demo row carries no label:\n%s", body)
 	}
@@ -279,7 +278,7 @@ func TestFailedDemoConnectIsNotMarkedAsDemo(t *testing.T) {
 	if m.demoMode() {
 		t.Error("a failed connection is being reported as the demo")
 	}
-	if v := zone.Scan(m.View()); strings.Contains(v, "DEMO") {
+	if v := scanZones(m.View()); strings.Contains(v, "DEMO") {
 		t.Errorf("the frame claims DEMO while showing No cluster:\n%s", v)
 	}
 }

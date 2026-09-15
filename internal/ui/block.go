@@ -2,16 +2,18 @@ package ui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/0x01001011/k10s/internal/theme"
 )
 
 // Block is a fixed-size rectangle of terminal cells. Every line is padded to
 // exactly W visible cells, so blocks can be joined without re-measuring
-// (important: measuring breaks once bubblezone markers are embedded).
+// (important: measuring breaks once zone markers are embedded).
 type Block struct {
 	W, H  int
 	Lines []string
@@ -22,6 +24,57 @@ func spaces(n int) string {
 		return ""
 	}
 	return strings.Repeat(" ", n)
+}
+
+// paintKey identifies one fg/bg/bold combination. The colour profile is part
+// of the key so a profile switch (tests, or a terminal that reports no colour)
+// can never serve stale escape sequences.
+type paintKey struct {
+	fg, bg  lipgloss.Color
+	bold    bool
+	profile termenv.Profile
+}
+
+var (
+	paintMu    sync.RWMutex
+	paintCache = map[paintKey][2]string{}
+)
+
+// paint writes text in fg on bg without going through lipgloss on every call.
+//
+// lipgloss.Style.Render re-resolves both colours from their hex strings and
+// re-formats the ANSI sequence every single time it is called; at ~40 rows ×
+// ~8 columns that dominated the frame. The escape prefix/suffix depends only
+// on the colour pair, so it is rendered once per combination and reused.
+//
+// The pair is taken from lipgloss' own output, not hand-assembled, so the
+// bytes stay identical to what Render would have produced.
+//
+// Only for single-line text with no border, margin or padding — that is every
+// table cell, but not a Panel frame.
+func paint(bg, fg lipgloss.Color, bold bool, text string) string {
+	k := paintKey{fg: fg, bg: bg, bold: bold, profile: lipgloss.ColorProfile()}
+
+	paintMu.RLock()
+	wrap, ok := paintCache[k]
+	paintMu.RUnlock()
+
+	if !ok {
+		style := lipgloss.NewStyle().Background(bg).Foreground(fg).Bold(bold)
+		// \x00 never appears in real cell text, so cutting on it splits
+		// Render's output into exactly its prefix and suffix.
+		pre, suf, found := strings.Cut(style.Render("\x00"), "\x00")
+		if !found {
+			// Render did something unexpected; fall back to it wholesale
+			// rather than emit corrupt escapes.
+			return style.Render(text)
+		}
+		wrap = [2]string{pre, suf}
+		paintMu.Lock()
+		paintCache[k] = wrap
+		paintMu.Unlock()
+	}
+	return wrap[0] + text + wrap[1]
 }
 
 func pad(s string, w int) string {
@@ -38,10 +91,16 @@ func pad(s string, w int) string {
 // padBG pads to w using an independently-rendered background run, so we never
 // nest lipgloss styles (a nested reset would drop the outer background).
 func padBG(s string, w int, bg lipgloss.Color) string {
-	d := w - lipgloss.Width(s)
-	switch {
+	return padBGOf(s, lipgloss.Width(s), w, bg)
+}
+
+// padBGOf is padBG for a caller that already knows how wide s is. Measuring a
+// line means an ANSI-aware walk over every escape in it, and the table builds
+// its rows to exact column widths, so it can say.
+func padBGOf(s string, cur, w int, bg lipgloss.Color) string {
+	switch d := w - cur; {
 	case d > 0:
-		return s + lipgloss.NewStyle().Background(bg).Render(spaces(d))
+		return s + paint(bg, "", false, spaces(d))
 	case d < 0:
 		return ansi.Truncate(s, w, "")
 	}
@@ -59,7 +118,7 @@ func trunc(s string, w int) string {
 }
 
 func NewBlock(w, h int, bg lipgloss.Color) Block {
-	fill := lipgloss.NewStyle().Background(bg).Render(spaces(w))
+	fill := paint(bg, "", false, spaces(w))
 	lines := make([]string, h)
 	for i := range lines {
 		lines[i] = fill
@@ -151,20 +210,23 @@ type PanelOpts struct {
 }
 
 func Panel(th theme.Theme, o PanelOpts, body []string) Block {
-	bs := lipgloss.NewStyle().Background(th.Bg).Foreground(th.Border)
+	borderCol := th.Border
 	if o.Focused {
-		bs = bs.Foreground(th.BorderOn)
+		borderCol = th.BorderOn
 	}
 	if o.BorderCol != "" {
-		bs = bs.Foreground(o.BorderCol)
+		borderCol = o.BorderCol
 	}
-	ts := lipgloss.NewStyle().Background(th.Bg).Foreground(th.Subtle)
+	bs := func(s string) string { return paint(th.Bg, borderCol, false, s) }
+
+	titleCol, titleBold := th.Subtle, false
 	if o.Focused {
-		ts = ts.Foreground(th.Accent).Bold(true)
+		titleCol, titleBold = th.Accent, true
 	}
 	if o.BorderCol != "" {
-		ts = ts.Foreground(o.BorderCol).Bold(true)
+		titleCol, titleBold = o.BorderCol, true
 	}
+	ts := func(s string) string { return paint(th.Bg, titleCol, titleBold, s) }
 
 	inner := o.W - 2
 	if inner < 1 {
@@ -184,7 +246,7 @@ func Panel(th theme.Theme, o PanelOpts, body []string) Block {
 		rightPlain = " " + o.TagPlain + " "
 	}
 	// A tag with no room at all is dropped rather than cut: o.Tag carries
-	// bubblezone markers, so truncating it would corrupt its click target.
+	// zone markers, so truncating it would corrupt its click target.
 	if lipgloss.Width(rightPlain) > inner-3 {
 		rightPlain = ""
 	}
@@ -200,22 +262,25 @@ func Panel(th theme.Theme, o PanelOpts, body []string) Block {
 	if fill < 0 {
 		fill = 0
 	}
-	top := bs.Render(bTL+bH+" ") + ts.Render(title) + bs.Render(" "+strings.Repeat(bH, fill))
+	top := bs(bTL+bH+" ") + ts(title) + bs(" "+strings.Repeat(bH, fill))
 	if rightPlain != "" {
-		top += bs.Render(" ") + o.Tag + bs.Render(" ")
+		top += bs(" ") + o.Tag + bs(" ")
 	}
-	top += bs.Render(bTR)
+	top += bs(bTR)
 
 	bodyH := o.H - 2
 	lines := make([]string, 0, o.H)
 	lines = append(lines, top)
+	// Both border cells are identical on every body line, so they are built
+	// once rather than per line.
+	edge := bs(bV)
 	for i := 0; i < bodyH; i++ {
 		s := ""
 		if i < len(body) {
 			s = body[i]
 		}
-		lines = append(lines, bs.Render(bV)+padBG(s, inner, th.Bg)+bs.Render(bV))
+		lines = append(lines, edge+padBG(s, inner, th.Bg)+edge)
 	}
-	lines = append(lines, bs.Render(bBL+strings.Repeat(bH, inner)+bBR))
+	lines = append(lines, bs(bBL+strings.Repeat(bH, inner)+bBR))
 	return Block{W: o.W, H: o.H, Lines: lines}
 }

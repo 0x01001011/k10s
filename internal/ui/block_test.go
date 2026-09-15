@@ -6,7 +6,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/mock"
 	"github.com/0x01001011/k10s/internal/theme"
@@ -48,7 +47,7 @@ func TestPanelTopBorderNeverExceedsItsWidth(t *testing.T) {
 				t.Fatalf("%s at w=%d: Block is %dx%d, want %dx4", c.name, w, b.W, b.H, w)
 			}
 			for i, ln := range b.Lines {
-				if got := lipgloss.Width(zone.Scan(ln)); got != w {
+				if got := lipgloss.Width(scanZones(ln)); got != w {
 					t.Errorf("%s at w=%d: line %d is %d cells, want %d",
 						c.name, w, i, got, w)
 				}
@@ -76,8 +75,8 @@ func TestLongTextTitleKeepsEveryRowAtTerminalWidth(t *testing.T) {
 		t.Fatalf("precondition: title %q is not long enough to overflow", m.textTitle)
 	}
 	for i, ln := range strings.Split(m.View(), "\n") {
-		if got := lipgloss.Width(zone.Scan(ln)); got != m.w {
-			t.Errorf("row %d is %d cells wide, want %d: %q", i, got, m.w, zone.Scan(ln))
+		if got := lipgloss.Width(scanZones(ln)); got != m.w {
+			t.Errorf("row %d is %d cells wide, want %d: %q", i, got, m.w, scanZones(ln))
 		}
 	}
 }

@@ -8,7 +8,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 	"github.com/muesli/termenv"
 
 	"github.com/0x01001011/k10s/internal/domain"
@@ -16,8 +15,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// View() calls zone.Scan, which needs the global zone manager.
-	zone.NewGlobal()
 	// Tests have no TTY, so lipgloss would otherwise strip all styling and
 	// colour assertions could never pass. Force the same profile cmd/shot
 	// uses.

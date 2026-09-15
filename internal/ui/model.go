@@ -12,7 +12,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/hinshun/vt10x"
 
@@ -257,6 +256,13 @@ type Model struct {
 	// anim advances on every repaint tick and drives the loading spinner.
 	anim int
 
+	// kindsMemo holds src.Kinds() for the current frame or message. Kinds()
+	// deep-copies every kind's Cols and Allowed, and kinds() is called
+	// dozens of times per frame (curKind/res go through it), which made it
+	// 11% of the bytes allocated per frame. Cleared at the top of Update and
+	// View, so it is never staler than one frame.
+	kindsMemo []domain.Kind
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -484,7 +490,14 @@ func (m *Model) withThemeWarning(status string) string {
 	return strings.Join(warnings, "   ·   ") + "   ·   " + status
 }
 
-func (m *Model) kinds() []domain.Kind { return m.src.Kinds() }
+// kinds returns the backend's kind list, memoised for the current frame or
+// message. Callers only ever read the result — none sort or append to it.
+func (m *Model) kinds() []domain.Kind {
+	if m.kindsMemo == nil {
+		m.kindsMemo = m.src.Kinds()
+	}
+	return m.kindsMemo
+}
 
 // curKind (aliased as res for brevity at call sites) returns the currently
 // selected kind, by resIdx into the full, unfiltered kind list.
@@ -933,6 +946,9 @@ func (m *Model) visibleRows() int {
 // ---- update ---------------------------------------------------------------
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// A message may be the one that added a kind, so this message sees a
+	// fresh list rather than the previous frame's.
+	m.kindsMemo = nil
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
@@ -2578,7 +2594,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if !m.modalOpen() {
 		m.hoverAct = ""
 		for _, a := range Actions {
-			if zone.Get("act:" + a.ID).InBounds(msg) {
+			if getZone("act:" + a.ID).inBounds(msg) {
 				m.hoverAct = a.ID
 				break
 			}
@@ -2625,7 +2641,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 	if m.confirm != nil {
 		notice := m.confirm.notice
-		if zone.Get("cf:ok").InBounds(msg) {
+		if getZone("cf:ok").inBounds(msg) {
 			// Clicking OK must obey the same gate the keyboard does, or the
 			// typed confirmation is one mouse click away from being no
 			// confirmation at all.
@@ -2639,7 +2655,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			if cb != nil {
 				return cb(m)
 			}
-		} else if !notice && zone.Get("cf:no").InBounds(msg) {
+		} else if !notice && getZone("cf:no").inBounds(msg) {
 			m.confirm = nil
 			m.toast = "cancelled"
 		}
@@ -2648,7 +2664,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 	if m.palOpen {
 		for i := range m.paletteHits() {
-			if zone.Get(fmt.Sprintf("pal:%d", i)).InBounds(msg) {
+			if getZone(fmt.Sprintf("pal:%d", i)).inBounds(msg) {
 				m.palIdx = i
 				m.gotoHit(m.paletteHits()[i])
 				return nil
@@ -2659,17 +2675,17 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 	if m.setOpen {
 		switch {
-		case zone.Get("set:save").InBounds(msg):
+		case getZone("set:save").inBounds(msg):
 			return m.closeSettings()
-		case zone.Get("set:updon").InBounds(msg):
+		case getZone("set:updon").inBounds(msg):
 			m.setUpdateChecks(true)
 			return nil
-		case zone.Get("set:updoff").InBounds(msg):
+		case getZone("set:updoff").inBounds(msg):
 			m.setUpdateChecks(false)
 			return nil
 		}
 		for i := 0; i < setRows(); i++ {
-			if zone.Get(fmt.Sprintf("set:%d", i)).InBounds(msg) {
+			if getZone(fmt.Sprintf("set:%d", i)).inBounds(msg) {
 				m.setRow = i
 				return m.activateSettingRow()
 			}
@@ -2678,11 +2694,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	if m.themeOpen {
-		if zone.Get("thm:save").InBounds(msg) {
+		if getZone("thm:save").inBounds(msg) {
 			return m.saveTheme()
 		}
 		for i := range m.themes {
-			if zone.Get(fmt.Sprintf("thm:%d", i)).InBounds(msg) {
+			if getZone(fmt.Sprintf("thm:%d", i)).inBounds(msg) {
 				m.themeRow = i
 				m.themeSave = false
 				m.previewTheme()
@@ -2692,49 +2708,49 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	for i, c := range m.suggestions() {
-		if zone.Get(fmt.Sprintf("sug:%d", i)).InBounds(msg) {
+		if getZone(fmt.Sprintf("sug:%d", i)).inBounds(msg) {
 			m.acceptSuggestion(c)
 			return nil
 		}
 	}
 
-	if zone.Get("zoom").InBounds(msg) {
+	if getZone("zoom").inBounds(msg) {
 		m.setZoomed(!m.zoomed)
 		return nil
 	}
-	if zone.Get("close").InBounds(msg) {
+	if getZone("close").inBounds(msg) {
 		m.backToTable()
 		return nil
 	}
-	if zone.Get("updbtn").InBounds(msg) {
+	if getZone("updbtn").inBounds(msg) {
 		return m.startUpdate("")
 	}
-	if zone.Get("nsbtn").InBounds(msg) {
+	if getZone("nsbtn").inBounds(msg) {
 		m.showNamespaceChooser()
 		return nil
 	}
-	if zone.Get("theme").InBounds(msg) {
+	if getZone("theme").inBounds(msg) {
 		// The same live-preview picker /theme opens — cycling blind through
 		// eight themes to find one was never the nice way to choose.
 		m.openThemePicker()
 		return nil
 	}
-	if zone.Get("promptzoom").InBounds(msg) {
+	if getZone("promptzoom").inBounds(msg) {
 		m.promptZoom = !m.promptZoom
 		if m.focus != focusPrompt {
 			return m.openPrompt("")
 		}
 		return nil
 	}
-	if zone.Get("aimode").InBounds(msg) {
+	if getZone("aimode").inBounds(msg) {
 		m.togglePromptMode() // says why, when AI is disabled
 		return nil
 	}
-	if zone.Get("prompt").InBounds(msg) {
+	if getZone("prompt").inBounds(msg) {
 		m.focus = focusPrompt
 		return m.input.Focus()
 	}
-	if zone.Get("tablesearch").InBounds(msg) {
+	if getZone("tablesearch").inBounds(msg) {
 		if m.mode == modeTable {
 			m.focus = focusMainSearch
 		}
@@ -2742,13 +2758,13 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	for gi, g := range m.groupOrder() {
-		if zone.Get(fmt.Sprintf("grp:%d", gi)).InBounds(msg) {
+		if getZone(fmt.Sprintf("grp:%d", gi)).inBounds(msg) {
 			m.toggleGroup(g)
 			return nil
 		}
 	}
 	for i := range m.kinds() {
-		if zone.Get(fmt.Sprintf("res:%d", i)).InBounds(msg) {
+		if getZone(fmt.Sprintf("res:%d", i)).inBounds(msg) {
 			// Selecting a kind, not the pane: focus stays where it was.
 			m.selectResource(i)
 			return nil
@@ -2756,7 +2772,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	if m.mode == modeContexts {
 		for i := range m.ctxChoices() {
-			if zone.Get(fmt.Sprintf("ctxp:%d", i)).InBounds(msg) {
+			if getZone(fmt.Sprintf("ctxp:%d", i)).inBounds(msg) {
 				m.ctxIdx = i
 				return m.chooseContext()
 			}
@@ -2766,7 +2782,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 	_, curRows := m.tableData()
 	for i := range curRows {
-		if zone.Get(fmt.Sprintf("row:%d", i)).InBounds(msg) {
+		if getZone(fmt.Sprintf("row:%d", i)).inBounds(msg) {
 			m.focus = focusMain
 			m.rowIdx = i
 			m.rowMem[m.curKind().Key] = i
@@ -2785,17 +2801,17 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 	for _, a := range Actions {
-		if zone.Get("act:" + a.ID).InBounds(msg) {
+		if getZone("act:" + a.ID).inBounds(msg) {
 			return tea.Batch(m.flashAction(a.ID), m.fireAction(a))
 		}
 	}
 	for _, sp := range m.lensActions() {
-		if zone.Get("lens:" + sp.ID).InBounds(msg) {
+		if getZone("lens:" + sp.ID).inBounds(msg) {
 			return tea.Batch(m.flashAction(sp.ID), m.fireLensAction(sp))
 		}
 	}
 	for _, p := range m.availablePlugins() {
-		if zone.Get("plugin:" + p.Name).InBounds(msg) {
+		if getZone("plugin:" + p.Name).inBounds(msg) {
 			return m.firePlugin(p)
 		}
 	}
@@ -2831,12 +2847,19 @@ func (m *Model) mark(id, s string) string {
 	if m.modalOpen() {
 		return s
 	}
-	return zone.Mark(id, s)
+	return markZone(id, s)
 }
 
 // modalOpen reports whether anything is overlaid on the main frame. While one
 // is, background zones are not marked so an overlay can never slice a
-// bubblezone marker in half.
+// zone marker in half.
+//
+// The suggestions popup is the exception: it is drawn when modalOpen is
+// false, so it does slice the zones it covers. Block.Overlay keeps the
+// escapes on both sides of the cut, so the scanner sees two marker pairs for
+// one id and records the second — a row is then clickable to the right of the
+// popup but not to its left. It fails closed (a fully covered zone ends up
+// zero-width, which inBounds rejects), never onto the wrong target.
 func (m *Model) modalOpen() bool {
 	return m.confirm != nil || m.setOpen || m.themeOpen || m.palOpen
 }

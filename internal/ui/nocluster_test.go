@@ -6,7 +6,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/domain"
 	"github.com/0x01001011/k10s/internal/mock"
@@ -35,7 +34,7 @@ func TestNoClusterShowsNoRows(t *testing.T) {
 		t.Errorf("RowCount = %d, want CountUnknown (no badge, not a count of nothing)", n)
 	}
 
-	v := zone.Scan(m.View())
+	v := scanZones(m.View())
 	if !strings.Contains(v, "No cluster") {
 		t.Fatalf("the frame never says there is no cluster:\n%s", v)
 	}
@@ -63,8 +62,8 @@ func TestNoClusterFrameKeepsEveryRowAtTerminalWidth(t *testing.T) {
 		m.Update(m.connectCmd("")())
 
 		for i, ln := range strings.Split(m.View(), "\n") {
-			if got := lipgloss.Width(zone.Scan(ln)); got != m.w {
-				t.Fatalf("w=%d: row %d is %d cells, want %d: %q", w, i, got, m.w, zone.Scan(ln))
+			if got := lipgloss.Width(scanZones(ln)); got != m.w {
+				t.Fatalf("w=%d: row %d is %d cells, want %d: %q", w, i, got, m.w, scanZones(ln))
 			}
 		}
 	}

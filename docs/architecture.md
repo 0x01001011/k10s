@@ -36,8 +36,9 @@ internal/ui/
 ```
 
 Dependencies: `bubbletea` (loop), `lipgloss` (styling), `bubbles/textinput`
-(prompt + inline edits), `bubblezone` (mouse hit-testing), `x/ansi`
-(width-aware truncate), `client-go` + `kubectl` (cluster access, describe).
+(prompt + inline edits), `x/ansi` (width-aware truncate), `client-go` +
+`kubectl` (cluster access, describe). Mouse hit-testing is our own
+(`internal/ui/zones.go`) — docs/performance.md says why.
 
 ## The Source boundary (`internal/domain`)
 
@@ -82,8 +83,8 @@ The whole frame is composed from `Block{W, H, Lines}` rectangles instead of
 `lipgloss.JoinHorizontal`:
 
 - **Invariant: every line is padded to exactly W visible cells.** Joins
-  (`HJoin`, `VJoin`) then never re-measure, which matters because bubblezone
-  embeds invisible markers that break naive width math.
+  (`HJoin`, `VJoin`) then never re-measure, which matters because zone
+  markers are invisible and break naive width math.
 - `padBG` pads with an independently-rendered background run — styles are
   never nested, so a nested SGR reset can't drop the outer background.
 - `Overlay(o, x, y)` stamps a block onto another (modals, popups) using
@@ -101,10 +102,10 @@ viewPrompt
 viewStatus
 → overlaySuggestions / overlayConfig / overlayThemePicker / overlayOnboard
   / overlayPalette / overlayNSPicker / overlayConfirm  (stamped on top)
-→ zone.Scan(root.String())                 — registers mouse zones, strips markers
+→ scanZones(root.String())                 — registers mouse zones, strips markers
 ```
 
-`Model.mark(id, s)` wraps content in a bubblezone marker but returns `s`
+`Model.mark(id, s)` wraps content in a zone marker but returns `s`
 unchanged while any overlay is open (`modalOpen()`), so an overlay never
 slices a marker in half.
 

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 )
 
 // ---- global search palette ----------------------------------------------
@@ -62,7 +61,7 @@ func (m *Model) overlayPalette(root Block) Block {
 			gap = 1
 		}
 		row += st(bg).Render(spaces(gap)) + st(th.Subtle).Render(trunc(h.sub, inner/3)) + st(bg).Render(" ")
-		body = append(body, zone.Mark(fmt.Sprintf("pal:%d", i), padBG(row, inner, bg)))
+		body = append(body, markZone(fmt.Sprintf("pal:%d", i), padBG(row, inner, bg)))
 	}
 
 	if len(hits) == 0 {

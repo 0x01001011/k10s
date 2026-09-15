@@ -80,9 +80,11 @@ cover:
 
 # ---- perf -----------------------------------------------------------------
 
-# Benchmark the render hot paths (sidebar counts vs full row formatting).
+# Benchmark the render hot paths (sidebar counts vs full row formatting) and
+# the frame itself (one View, and a keypress plus the frame it produces).
 bench:
     go test ./internal/k8s/ -bench Benchmark -run '^$' -benchmem
+    go test ./internal/ui/ -bench Benchmark -run '^$' -benchmem
 
 # Perf guards only: startup latency, per-frame cost, clean stderr.
 test-perf:

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/config"
 	"github.com/0x01001011/k10s/internal/domain"
@@ -96,9 +95,6 @@ func main() {
 
 	k8s.SilenceLogging()
 
-	zone.NewGlobal()
-	defer zone.Close()
-
 	// Everything the UI needs to draw its first frame comes from kubeconfig
 	// alone — no request, so no hang. The connection itself happens once the
 	// event loop is running.
@@ -126,8 +122,8 @@ func main() {
 	}
 
 	// Set when the user accepted the restart offer after /update installed a
-	// new binary. zone.Close has already run via defer order, and the alt
-	// screen is torn down by Run, so the exec lands in a clean terminal.
+	// new binary. The alt screen is torn down by Run, so the exec lands in a
+	// clean terminal.
 	if m.Relaunch() {
 		exe, err := update.TargetPath()
 		if err == nil {

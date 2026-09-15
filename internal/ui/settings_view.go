@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 
 	"github.com/0x01001011/k10s/internal/config"
 	"github.com/0x01001011/k10s/internal/version"
@@ -61,7 +60,7 @@ func (m *Model) overlaySettings(root Block) Block {
 			}
 			row += st(th.Fg).Bold(ci == m.setRow).Render(label)
 		}
-		body = append(body, zone.Mark(fmt.Sprintf("set:%d", ci), padBG(row, inner, bg)))
+		body = append(body, markZone(fmt.Sprintf("set:%d", ci), padBG(row, inner, bg)))
 	}
 
 	// The AI PROMPT block (provider radios, base url, model, api key) used
@@ -85,13 +84,13 @@ func (m *Model) overlaySettings(root Block) Block {
 			if on {
 				mark, col = "● ", th.Accent2
 			}
-			return zone.Mark(id, st(col).Render(mark+txt))
+			return markZone(id, st(col).Render(mark+txt))
 		}
 		row := st(th.Accent).Render(lead(ui)) + st(th.Subtle).Render(fmt.Sprintf("%-9s", "check")) +
 			radio(!m.updDisabled, "daily", "set:updon") +
 			st(bg).Render("   ") +
 			radio(m.updDisabled, "off", "set:updoff")
-		body = append(body, zone.Mark(fmt.Sprintf("set:%d", ui), padBG(row, inner, bg)))
+		body = append(body, markZone(fmt.Sprintf("set:%d", ui), padBG(row, inner, bg)))
 	}
 
 	body = append(body,

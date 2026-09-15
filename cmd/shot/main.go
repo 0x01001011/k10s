@@ -15,7 +15,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	zone "github.com/lrstanley/bubblezone"
 	"github.com/muesli/termenv"
 
 	"github.com/0x01001011/k10s/internal/domain"
@@ -53,8 +52,6 @@ func main() {
 	}
 
 	lipgloss.SetColorProfile(termenv.TrueColor)
-	zone.NewGlobal()
-	defer zone.Close()
 
 	// The demo gates its lens kinds on one context, the same way the real
 	// backend gates them on discovery — so rendering them headlessly needs a
