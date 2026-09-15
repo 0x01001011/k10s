@@ -2853,6 +2853,13 @@ func (m *Model) mark(id, s string) string {
 // modalOpen reports whether anything is overlaid on the main frame. While one
 // is, background zones are not marked so an overlay can never slice a
 // zone marker in half.
+//
+// The suggestions popup is the exception: it is drawn when modalOpen is
+// false, so it does slice the zones it covers. Block.Overlay keeps the
+// escapes on both sides of the cut, so the scanner sees two marker pairs for
+// one id and records the second — a row is then clickable to the right of the
+// popup but not to its left. It fails closed (a fully covered zone ends up
+// zero-width, which inBounds rejects), never onto the wrong target.
 func (m *Model) modalOpen() bool {
 	return m.confirm != nil || m.setOpen || m.themeOpen || m.palOpen
 }

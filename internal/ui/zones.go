@@ -45,6 +45,11 @@ var (
 
 	// Ids are interned to integers so a marker's body is digits only and
 	// stays a well-formed CSI sequence whatever the id contains.
+	//
+	// These two are never pruned, which is only safe because every id is
+	// drawn from a bounded set: an index (row:%d, res:%d, sug:%d, …) or a
+	// fixed action, lens or plugin name. An id derived from a resource name
+	// would turn this into a per-session leak.
 	zoneIDMu sync.RWMutex
 	zoneNum  = map[string]int{}
 	zoneName = map[int]string{}
