@@ -82,9 +82,6 @@ func gauge(th theme.Theme, pct, width int) string {
 
 func (m *Model) viewHeader(l layout) Block {
 	th := m.th()
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 	inner := m.w - 2
 
 	nodes := m.src.Nodes()
@@ -111,8 +108,8 @@ func (m *Model) viewHeader(l layout) Block {
 	usedCores, totalCores := float64(usedMilli)/1000, float64(allocMilli)/1000
 	usedGiB, totalGiB := float64(usedBytes)/(1<<30), float64(allocBytes)/(1<<30)
 
-	brand := s(th.Accent).Bold(true).Render(" ⎈ k10s")
-	sep := s(th.Border).Render("  │  ")
+	brand := paint(th.Bg, th.Accent, true, " ⎈ k10s")
+	sep := paint(th.Bg, th.Border, false, "  │  ")
 	nodeCol := th.Ok
 	if ready < nn {
 		nodeCol = th.Warn
@@ -135,29 +132,29 @@ func (m *Model) viewHeader(l layout) Block {
 	demoTag := ""
 	if m.demoMode() {
 		ctxCol = th.Warn
-		demoTag = s(th.Warn).Bold(true).Render(" DEMO") +
-			s(th.Subtle).Render(" sample data · :ctx to leave")
+		demoTag = paint(th.Bg, th.Warn, true, " DEMO") +
+			paint(th.Bg, th.Subtle, false, " sample data · :ctx to leave")
 	}
-	line0 := brand + sep + s(ctxCol).Render(ctxTxt) + demoTag +
-		sep + s(th.Subtle).Render("ver ") + s(th.Fg).Render(ci.Version) +
-		sep + s(th.Subtle).Render("nodes ") + s(nodeCol).Render(nodeTxt)
+	line0 := brand + sep + paint(th.Bg, ctxCol, false, ctxTxt) + demoTag +
+		sep + paint(th.Bg, th.Subtle, false, "ver ") + paint(th.Bg, th.Fg, false, ci.Version) +
+		sep + paint(th.Bg, th.Subtle, false, "nodes ") + paint(th.Bg, nodeCol, false, nodeTxt)
 
 	// Right-hand buttons: namespace, then theme. Both are clickable and
 	// both say what they currently are, so the header doubles as status.
 	nsPlain := "ns " + m.namespace + " ▾"
-	nsBtn := m.mark("nsbtn", s(th.Subtle).Render("ns ")+s(th.Accent2).Render(m.namespace)+s(th.Subtle).Render(" ▾"))
+	nsBtn := m.mark("nsbtn", paint(th.Bg, th.Subtle, false, "ns ")+paint(th.Bg, th.Accent2, false, m.namespace)+paint(th.Bg, th.Subtle, false, " ▾"))
 
 	themePlain := "theme " + m.th().Name + " ⟳"
-	themeTag := m.mark("theme", s(th.Subtle).Render("theme ")+s(th.Accent).Render(m.th().Name)+s(th.Subtle).Render(" ⟳"))
+	themeTag := m.mark("theme", paint(th.Bg, th.Subtle, false, "theme ")+paint(th.Bg, th.Accent, false, m.th().Name)+paint(th.Bg, th.Subtle, false, " ⟳"))
 
-	right := nsBtn + s(th.Border).Render("  │  ") + themeTag
+	right := nsBtn + paint(th.Bg, th.Border, false, "  │  ") + themeTag
 	rightPlain := nsPlain + "  │  " + themePlain
 
 	gapw := inner - lipgloss.Width(line0) - lipgloss.Width(rightPlain)
 	if gapw < 1 {
 		gapw = 1
 	}
-	line0 += s(th.Bg).Render(spaces(gapw)) + right
+	line0 += paint(th.Bg, th.Bg, false, spaces(gapw)) + right
 
 	// Both gauges carry a direction arrow after the percentage. Only real
 	// readings are tracked: with no nodes the totals are placeholders, and
@@ -166,29 +163,29 @@ func (m *Model) viewHeader(l layout) Block {
 		m.cpuTrend.observe(cpuPct, m.anim)
 		m.memTrend.observe(memPct, m.anim)
 	}
-	totals := s(th.Subtle).Bold(true).Render(" CPU  ") + gauge(th, cpuPct, 16) +
-		s(th.Bg).Render(" ") + trendGlyph(th, th.Bg, m.cpuTrend.arrow(m.anim)) +
-		s(th.Subtle).Render(fmt.Sprintf("  %.1f/%.0f cores", usedCores, totalCores)) +
-		s(th.Bg).Render("    ") +
-		s(th.Subtle).Bold(true).Render("MEM  ") + gauge(th, memPct, 16) +
-		s(th.Bg).Render(" ") + trendGlyph(th, th.Bg, m.memTrend.arrow(m.anim)) +
-		s(th.Subtle).Render(fmt.Sprintf("  %.1f/%.1f GiB", usedGiB, totalGiB))
+	totals := paint(th.Bg, th.Subtle, true, " CPU  ") + gauge(th, cpuPct, 16) +
+		paint(th.Bg, th.Bg, false, " ") + trendGlyph(th, th.Bg, m.cpuTrend.arrow(m.anim)) +
+		paint(th.Bg, th.Subtle, false, fmt.Sprintf("  %.1f/%.0f cores", usedCores, totalCores)) +
+		paint(th.Bg, th.Bg, false, "    ") +
+		paint(th.Bg, th.Subtle, true, "MEM  ") + gauge(th, memPct, 16) +
+		paint(th.Bg, th.Bg, false, " ") + trendGlyph(th, th.Bg, m.memTrend.arrow(m.anim)) +
+		paint(th.Bg, th.Subtle, false, fmt.Sprintf("  %.1f/%.1f GiB", usedGiB, totalGiB))
 	// nn is clamped to 1 so the averages above cannot divide by zero, which
 	// with no nodes at all would print "0.0/16 cores" — a capacity figure for
 	// a cluster that isn't there. Say nothing instead.
 	if len(nodes) == 0 {
-		totals = s(th.Subtle).Bold(true).Render(" CPU  ") + s(th.Subtle).Render("—") +
-			s(th.Bg).Render("    ") +
-			s(th.Subtle).Bold(true).Render("MEM  ") + s(th.Subtle).Render("—")
+		totals = paint(th.Bg, th.Subtle, true, " CPU  ") + paint(th.Bg, th.Subtle, false, "—") +
+			paint(th.Bg, th.Bg, false, "    ") +
+			paint(th.Bg, th.Subtle, true, "MEM  ") + paint(th.Bg, th.Subtle, false, "—")
 	}
-	// s(th.Bg).Render("    ") +
-	// s(th.Subtle).Render("per-node view → Resources ▸ Nodes")
+	// paint(th.Bg, th.Bg, false, "    ") +
+	// paint(th.Bg, th.Subtle, false, "per-node view → Resources ▸ Nodes")
 
 	lines := []string{
 		line0,
 		"",
 		totals,
-		s(th.Border).Render(spaces(1) + strings.Repeat("╌", maxi(1, inner))),
+		paint(th.Bg, th.Border, false, spaces(1)+strings.Repeat("╌", maxi(1, inner))),
 	}
 	return BlockOf(m.w, l.headerH, lines, th.Bg)
 }
@@ -199,9 +196,6 @@ func (m *Model) viewList(w, h int) Block {
 	th := m.th()
 	if w == 0 {
 		return Block{W: 0, H: h, Lines: make([]string, h)}
-	}
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
 	}
 	inner := w - 2
 	focused := m.focus == focusList
@@ -234,7 +228,7 @@ func (m *Model) viewList(w, h int) Block {
 		}
 	}
 	if len(f) == 0 {
-		lines = append(lines, s(th.Subtle).Render(" no match"))
+		lines = append(lines, paint(th.Bg, th.Subtle, false, " no match"))
 	}
 
 	// No search box here: the list is type-to-filter, so a permanent box was
@@ -280,7 +274,7 @@ func (m *Model) viewList(w, h int) Block {
 		tagPlain += more
 	}
 	if tagPlain != "" {
-		tag = s(th.Subtle).Render(tagPlain)
+		tag = paint(th.Bg, th.Subtle, false, tagPlain)
 	}
 
 	return Panel(th, PanelOpts{Title: title, Tag: tag, TagPlain: tagPlain, Focused: focused, W: w, H: h}, lines)
@@ -290,9 +284,6 @@ func (m *Model) viewList(w, h int) Block {
 // when the backend knows it, and the selection highlight.
 func (m *Model) kindRow(r domain.Kind, idx, inner int) string {
 	th := m.th()
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 
 	// A lazily-watching backend only knows counts for kinds already opened;
 	// show nothing rather than a misleading 0.
@@ -308,14 +299,13 @@ func (m *Model) kindRow(r domain.Kind, idx, inner int) string {
 
 	var row string
 	if idx == m.resIdx {
-		sel := lipgloss.NewStyle().Background(th.SelBg)
-		row = sel.Foreground(th.Accent).Render(" ▸ ") +
-			sel.Foreground(th.SelFg).Bold(true).Render(label) +
-			sel.Render(spaces(gap)) +
-			sel.Foreground(th.Accent2).Render(count)
+		row = paint(th.SelBg, th.Accent, false, " ▸ ") +
+			paint(th.SelBg, th.SelFg, true, label) +
+			paint(th.SelBg, "", false, spaces(gap)) +
+			paint(th.SelBg, th.Accent2, false, count)
 	} else {
-		row = s(th.Bg).Render("   ") + s(th.Fg).Render(label) +
-			s(th.Bg).Render(spaces(gap)) + s(th.Subtle).Render(count)
+		row = paint(th.Bg, th.Bg, false, "   ") + paint(th.Bg, th.Fg, false, label) +
+			paint(th.Bg, th.Bg, false, spaces(gap)) + paint(th.Bg, th.Subtle, false, count)
 	}
 	return m.mark(fmt.Sprintf("res:%d", idx), padBG(row, inner, colorOf(idx == m.resIdx, th.SelBg, th.Bg)))
 }
@@ -326,9 +316,6 @@ func (m *Model) kindRow(r domain.Kind, idx, inner int) string {
 // Without that marker a folded group would silently swallow "where am I".
 func (m *Model) groupHeader(group string, folded bool, inner int) string {
 	th := m.th()
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 
 	holdsCursor := false
 	for _, i := range m.groupKinds(group) {
@@ -350,7 +337,7 @@ func (m *Model) groupHeader(group string, folded bool, inner int) string {
 		chevCol = th.Accent
 	}
 
-	row := s(chevCol).Render(" "+chevron+" ") + s(label).Bold(true).Render(strings.ToUpper(group))
+	row := paint(th.Bg, chevCol, false, " "+chevron+" ") + paint(th.Bg, label, true, strings.ToUpper(group))
 	if !folded {
 		return row
 	}
@@ -361,7 +348,7 @@ func (m *Model) groupHeader(group string, folded bool, inner int) string {
 	}
 	// Subtle, not Border: this is a count you are meant to read, and the
 	// border colour is for the lines around the panel.
-	return row + s(th.Bg).Render(spaces(gap)) + s(th.Subtle).Render(tag)
+	return row + paint(th.Bg, th.Bg, false, spaces(gap)) + paint(th.Bg, th.Subtle, false, tag)
 }
 
 func colorOf(cond bool, a, b lipgloss.Color) lipgloss.Color {
@@ -628,9 +615,6 @@ func (m *Model) viewMain(w, h int) Block {
 // Resources pane's search box but scoped to the table currently on screen.
 func (m *Model) tableSearchBox(inner int) string {
 	th := m.th()
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 	focused := m.focus == focusMainSearch
 	qCol, curCol := th.Subtle, th.Border
 	if focused {
@@ -642,18 +626,18 @@ func (m *Model) tableSearchBox(inner int) string {
 		_, rows := m.tableData()
 		cnt = fmt.Sprintf("%d/%d", len(rows), total)
 	}
-	row := s(th.Accent).Render(" / ") + s(qCol).Render(trunc(m.rowSearch, inner-6-len(cnt)))
+	row := paint(th.Bg, th.Accent, false, " / ") + paint(th.Bg, qCol, false, trunc(m.rowSearch, inner-6-len(cnt)))
 	if focused {
-		row += s(curCol).Render("█")
+		row += paint(th.Bg, curCol, false, "█")
 	} else if m.rowSearch == "" {
-		row += s(th.Subtle).Render(trunc("press f to search rows…", inner-5))
+		row += paint(th.Bg, th.Subtle, false, trunc("press f to search rows…", inner-5))
 	}
 	if cnt != "" {
 		gap := inner - lipgloss.Width(row) - len(cnt) - 1
 		if gap < 1 {
 			gap = 1
 		}
-		row += s(th.Bg).Render(spaces(gap)) + s(th.Subtle).Render(cnt)
+		row += paint(th.Bg, th.Bg, false, spaces(gap)) + paint(th.Bg, th.Subtle, false, cnt)
 	}
 	return m.mark("tablesearch", padBG(row, inner, th.Bg))
 }
@@ -692,9 +676,6 @@ func (m *Model) tableBody(inner, rows int) []string {
 	nameCol := "NAME"
 	if m.res().Key == "events" {
 		nameCol = "OBJECT"
-	}
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
 	}
 	const gap = 2
 	cols, allRows := m.tableData()
@@ -841,9 +822,9 @@ func (m *Model) tableBody(inner, rows int) []string {
 			out = append(out, "")
 			out = append(out, m.loadingLines(inner)...)
 		case m.rowSearch != "":
-			out = append(out, s(th.Subtle).Render(fmt.Sprintf("   no rows match %q", m.rowSearch)))
+			out = append(out, paint(th.Bg, th.Subtle, false, fmt.Sprintf("   no rows match %q", m.rowSearch)))
 		default:
-			out = append(out, s(th.Subtle).Render("   no resources found"))
+			out = append(out, paint(th.Bg, th.Subtle, false, "   no resources found"))
 		}
 	}
 	return out
@@ -856,16 +837,13 @@ func (m *Model) viewActions(w, h int) Block {
 	if w == 0 {
 		return Block{W: 0, H: h, Lines: make([]string, h)}
 	}
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 	inner := w - 2
 	if m.mode == modeContexts {
 		lines := []string{
-			s(th.Subtle).Render(" context picker"),
-			s(th.Border).Render(strings.Repeat("╌", inner)),
-			s(th.Subtle).Render(" actions paused"),
-			s(th.Accent).Render(" [enter] reconnect"),
+			paint(th.Bg, th.Subtle, false, " context picker"),
+			paint(th.Bg, th.Border, false, strings.Repeat("╌", inner)),
+			paint(th.Bg, th.Subtle, false, " actions paused"),
+			paint(th.Bg, th.Accent, false, " [enter] reconnect"),
 		}
 		return Panel(th, PanelOpts{Title: "Actions", Focused: false, W: w, H: h}, lines)
 	}
@@ -876,18 +854,18 @@ func (m *Model) viewActions(w, h int) Block {
 	// says what is missing instead.
 	if m.offline {
 		return Panel(th, PanelOpts{Title: "Actions", Focused: false, W: w, H: h}, []string{
-			s(th.Subtle).Render(" " + trunc("no cluster", inner-1)),
-			s(th.Border).Render(strings.Repeat("╌", inner)),
-			s(th.Subtle).Render(" " + trunc("nothing to act on", inner-1)),
+			paint(th.Bg, th.Subtle, false, " "+trunc("no cluster", inner-1)),
+			paint(th.Bg, th.Border, false, strings.Repeat("╌", inner)),
+			paint(th.Bg, th.Subtle, false, " "+trunc("nothing to act on", inner-1)),
 			"",
-			s(th.Accent2).Render(" r") + s(th.Subtle).Render(trunc("  retry", inner-3)),
-			s(th.Accent2).Render(" /setup") + s(th.Subtle).Render(trunc("  guide", inner-8)),
+			paint(th.Bg, th.Accent2, false, " r") + paint(th.Bg, th.Subtle, false, trunc("  retry", inner-3)),
+			paint(th.Bg, th.Accent2, false, " /setup") + paint(th.Bg, th.Subtle, false, trunc("  guide", inner-8)),
 		})
 	}
 
 	lines := []string{
-		s(th.Subtle).Render(" " + trunc(r.Short+"/"+m.curName(), inner-1)),
-		s(th.Border).Render(strings.Repeat("╌", inner)),
+		paint(th.Bg, th.Subtle, false, " "+trunc(r.Short+"/"+m.curName(), inner-1)),
+		paint(th.Bg, th.Border, false, strings.Repeat("╌", inner)),
 	}
 	// Only actions that actually apply to the selected kind are listed —
 	// a pane of greyed-out rows is noise, and the list is short enough that
@@ -902,7 +880,7 @@ func (m *Model) viewActions(w, h int) Block {
 	sepDone := false
 	for _, a := range shown {
 		if a.Risky && !sepDone {
-			lines = append(lines, s(th.Border).Render(strings.Repeat("╌", inner)))
+			lines = append(lines, paint(th.Bg, th.Border, false, strings.Repeat("╌", inner)))
 			sepDone = true
 		}
 
@@ -952,7 +930,7 @@ func (m *Model) viewActions(w, h int) Block {
 	// are the pack's vocabulary, not k10s's, and mixing them into the same
 	// list would make "Sync" look as universal as "Describe".
 	if specs := m.lensActions(); len(specs) > 0 {
-		lines = append(lines, s(th.Border).Render(strings.Repeat("╌", inner)))
+		lines = append(lines, paint(th.Bg, th.Border, false, strings.Repeat("╌", inner)))
 		for i, sp := range specs {
 			k := lensKeyFor(i)
 			if k == "" {
@@ -971,15 +949,15 @@ func (m *Model) viewActions(w, h int) Block {
 			if m.lensAck != nil && m.lensAck.id == sp.ID {
 				glyph = m.lensAckGlyph()
 			}
-			row := s(th.Border).Render(glyph+"[") + s(keyCol).Render(k) + s(th.Border).Render("] ") +
-				s(labCol).Render(trunc(sp.Label, inner-6))
+			row := paint(th.Bg, th.Border, false, glyph+"[") + paint(th.Bg, keyCol, false, k) + paint(th.Bg, th.Border, false, "] ") +
+				paint(th.Bg, labCol, false, trunc(sp.Label, inner-6))
 			lines = append(lines, m.mark("lens:"+sp.ID, padBG(row, inner, th.Bg)))
 		}
 	}
 
 	plugins := m.availablePlugins()
 	if len(plugins) > 0 {
-		lines = append(lines, s(th.Border).Render(strings.Repeat("╌", inner)))
+		lines = append(lines, paint(th.Bg, th.Border, false, strings.Repeat("╌", inner)))
 	}
 	for _, item := range plugins {
 		shortcut := plugin.NormalizeShortcut(item.ShortCut)
@@ -987,8 +965,8 @@ func (m *Model) viewActions(w, h int) Block {
 		if item.Dangerous {
 			keyCol, labelCol = th.Err, th.Err
 		}
-		row := s(th.Border).Render(" [") + s(keyCol).Render(shortcut) + s(th.Border).Render("] ") +
-			s(labelCol).Render(trunc(pluginLabel(item), inner-len(shortcut)-5))
+		row := paint(th.Bg, th.Border, false, " [") + paint(th.Bg, keyCol, false, shortcut) + paint(th.Bg, th.Border, false, "] ") +
+			paint(th.Bg, labelCol, false, trunc(pluginLabel(item), inner-len(shortcut)-5))
 		lines = append(lines, m.mark("plugin:"+item.Name, padBG(row, inner, th.Bg)))
 	}
 	return Panel(th, PanelOpts{Title: "Actions", Focused: false, W: w, H: h}, lines)
@@ -1057,25 +1035,22 @@ func (m *Model) viewPrompt(l layout) Block {
 
 func (m *Model) viewStatus() Block {
 	th := m.th()
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 	dot, dotCol := " ● ", th.Accent2
 	if m.mouseOff {
 		// Make copy-mode unmistakable: clicking is dead while it's on.
 		dot, dotCol = " ✂ ", th.Warn
 	}
-	left := s(dotCol).Render(dot) + s(th.Fg).Render(trunc(m.toast, m.w/2))
+	left := paint(th.Bg, dotCol, false, dot) + paint(th.Bg, th.Fg, false, trunc(m.toast, m.w/2))
 	hints := "tab panes · enter open · ctrl+p search · f find · z zoom · ctrl+s copy · q quit"
-	right := s(th.Subtle).Render(trunc(hints, m.w/2-2)) + s(th.Bg).Render(" ")
+	right := paint(th.Bg, th.Subtle, false, trunc(hints, m.w/2-2)) + paint(th.Bg, th.Bg, false, " ")
 	rightPlain := trunc(hints, m.w/2-2)
 
 	// A waiting release earns one clickable badge and nothing more: the
 	// toast that announced it scrolls away, and there is no other place that
 	// keeps saying so.
 	if badge := m.updateBadge(); badge != "" {
-		right = markZone("updbtn", s(th.Accent2).Bold(true).Render(" "+badge+" ")) +
-			s(th.Border).Render("│ ") + right
+		right = markZone("updbtn", paint(th.Bg, th.Accent2, true, " "+badge+" ")) +
+			paint(th.Bg, th.Border, false, "│ ") + right
 		rightPlain = " " + badge + " │ " + rightPlain
 	}
 
@@ -1083,7 +1058,7 @@ func (m *Model) viewStatus() Block {
 	if gapw < 1 {
 		gapw = 1
 	}
-	return BlockOf(m.w, 1, []string{left + s(th.Bg).Render(spaces(gapw)) + right}, th.Bg)
+	return BlockOf(m.w, 1, []string{left + paint(th.Bg, th.Bg, false, spaces(gapw)) + right}, th.Bg)
 }
 
 // ---- overlays --------------------------------------------------------------
@@ -1168,10 +1143,6 @@ func (m *Model) overlayConfirm(root Block) Block {
 	if c.danger {
 		accent = th.Err
 	}
-	s := func(col lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(col)
-	}
-
 	w := 58
 	if w > m.w-8 {
 		w = m.w - 8
@@ -1180,14 +1151,14 @@ func (m *Model) overlayConfirm(root Block) Block {
 
 	body := []string{""}
 	for _, ln := range c.message {
-		body = append(body, s(th.Fg).Render("  "+trunc(ln, inner-3)))
+		body = append(body, paint(th.Bg, th.Fg, false, "  "+trunc(ln, inner-3)))
 	}
 	body = append(body, "")
 
 	if c.typed != "" {
 		body = append(body,
-			s(th.Subtle).Render("  type "),
-			s(accent).Bold(true).Render("  "+trunc(c.typed, inner-3)),
+			paint(th.Bg, th.Subtle, false, "  type "),
+			paint(th.Bg, accent, true, "  "+trunc(c.typed, inner-3)),
 			"",
 		)
 		field := c.buf + "▏"
@@ -1196,7 +1167,7 @@ func (m *Model) overlayConfirm(root Block) Block {
 			col = th.Ok
 		}
 		body = append(body,
-			s(th.Border).Render("  ▸ ")+s(col).Render(trunc(field, inner-5)),
+			paint(th.Bg, th.Border, false, "  ▸ ")+paint(th.Bg, col, false, trunc(field, inner-5)),
 			"",
 		)
 	}
@@ -1220,7 +1191,7 @@ func (m *Model) overlayConfirm(root Block) Block {
 	row := ok
 	if noPlain != "" {
 		no := markZone("cf:no", lipgloss.NewStyle().Background(th.Border).Foreground(th.Fg).Render(noPlain))
-		row = ok + s(th.Bg).Render(spaces(btnGap)) + no
+		row = ok + paint(th.Bg, th.Bg, false, spaces(btnGap)) + no
 	} else {
 		btnGap = 0
 	}
@@ -1228,7 +1199,7 @@ func (m *Model) overlayConfirm(root Block) Block {
 	if pre < 1 {
 		pre = 1
 	}
-	body = append(body, s(th.Bg).Render(spaces(pre))+row)
+	body = append(body, paint(th.Bg, th.Bg, false, spaces(pre))+row)
 	body = append(body, "")
 
 	h := len(body) + 2
@@ -1263,9 +1234,6 @@ func rowNumBase(kindKey string) int {
 // the value wrapped underneath, which is the point of growing the box.
 func (m *Model) zoomedPromptBody(caret string, inner, rows int) []string {
 	th := m.th()
-	s := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 
 	textW := maxi(8, inner-4)
 	segs := wrapLine(m.input.Value(), textW)
@@ -1279,7 +1247,7 @@ func (m *Model) zoomedPromptBody(caret string, inner, rows int) []string {
 			if len(out) >= rows-1 {
 				break
 			}
-			out = append(out, padBG(s(th.Bg).Render("   ")+s(th.Fg).Render(seg), inner, th.Bg))
+			out = append(out, padBG(paint(th.Bg, th.Bg, false, "   ")+paint(th.Bg, th.Fg, false, seg), inner, th.Bg))
 		}
 	}
 	for len(out) < rows-1 {
@@ -1290,6 +1258,6 @@ func (m *Model) zoomedPromptBody(caret string, inner, rows int) []string {
 	if m.pmode == promptAI && !aiDisabled {
 		hint = " ctrl+z shrink · esc back · enter ask " + m.cfg.model
 	}
-	out = append(out, padBG(s(th.Subtle).Render(trunc(hint, inner)), inner, th.Bg))
+	out = append(out, padBG(paint(th.Bg, th.Subtle, false, trunc(hint, inner)), inner, th.Bg))
 	return out
 }
