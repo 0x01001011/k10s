@@ -112,7 +112,7 @@ func trunc(s string, w int) string {
 }
 
 func NewBlock(w, h int, bg lipgloss.Color) Block {
-	fill := lipgloss.NewStyle().Background(bg).Render(spaces(w))
+	fill := paint(bg, "", false, spaces(w))
 	lines := make([]string, h)
 	for i := range lines {
 		lines[i] = fill
@@ -204,20 +204,23 @@ type PanelOpts struct {
 }
 
 func Panel(th theme.Theme, o PanelOpts, body []string) Block {
-	bs := lipgloss.NewStyle().Background(th.Bg).Foreground(th.Border)
+	borderCol := th.Border
 	if o.Focused {
-		bs = bs.Foreground(th.BorderOn)
+		borderCol = th.BorderOn
 	}
 	if o.BorderCol != "" {
-		bs = bs.Foreground(o.BorderCol)
+		borderCol = o.BorderCol
 	}
-	ts := lipgloss.NewStyle().Background(th.Bg).Foreground(th.Subtle)
+	bs := func(s string) string { return paint(th.Bg, borderCol, false, s) }
+
+	titleCol, titleBold := th.Subtle, false
 	if o.Focused {
-		ts = ts.Foreground(th.Accent).Bold(true)
+		titleCol, titleBold = th.Accent, true
 	}
 	if o.BorderCol != "" {
-		ts = ts.Foreground(o.BorderCol).Bold(true)
+		titleCol, titleBold = o.BorderCol, true
 	}
+	ts := func(s string) string { return paint(th.Bg, titleCol, titleBold, s) }
 
 	inner := o.W - 2
 	if inner < 1 {
@@ -253,22 +256,25 @@ func Panel(th theme.Theme, o PanelOpts, body []string) Block {
 	if fill < 0 {
 		fill = 0
 	}
-	top := bs.Render(bTL+bH+" ") + ts.Render(title) + bs.Render(" "+strings.Repeat(bH, fill))
+	top := bs(bTL+bH+" ") + ts(title) + bs(" "+strings.Repeat(bH, fill))
 	if rightPlain != "" {
-		top += bs.Render(" ") + o.Tag + bs.Render(" ")
+		top += bs(" ") + o.Tag + bs(" ")
 	}
-	top += bs.Render(bTR)
+	top += bs(bTR)
 
 	bodyH := o.H - 2
 	lines := make([]string, 0, o.H)
 	lines = append(lines, top)
+	// Both border cells are identical on every body line, so they are built
+	// once rather than per line.
+	edge := bs(bV)
 	for i := 0; i < bodyH; i++ {
 		s := ""
 		if i < len(body) {
 			s = body[i]
 		}
-		lines = append(lines, bs.Render(bV)+padBG(s, inner, th.Bg)+bs.Render(bV))
+		lines = append(lines, edge+padBG(s, inner, th.Bg)+edge)
 	}
-	lines = append(lines, bs.Render(bBL+strings.Repeat(bH, inner)+bBR))
+	lines = append(lines, bs(bBL+strings.Repeat(bH, inner)+bBR))
 	return Block{W: o.W, H: o.H, Lines: lines}
 }
