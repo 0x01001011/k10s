@@ -2,9 +2,11 @@ package ui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/0x01001011/k10s/internal/theme"
 )
@@ -24,6 +26,57 @@ func spaces(n int) string {
 	return strings.Repeat(" ", n)
 }
 
+// paintKey identifies one fg/bg/bold combination. The colour profile is part
+// of the key so a profile switch (tests, or a terminal that reports no colour)
+// can never serve stale escape sequences.
+type paintKey struct {
+	fg, bg  lipgloss.Color
+	bold    bool
+	profile termenv.Profile
+}
+
+var (
+	paintMu    sync.RWMutex
+	paintCache = map[paintKey][2]string{}
+)
+
+// paint writes text in fg on bg without going through lipgloss on every call.
+//
+// lipgloss.Style.Render re-resolves both colours from their hex strings and
+// re-formats the ANSI sequence every single time it is called; at ~40 rows ×
+// ~8 columns that dominated the frame. The escape prefix/suffix depends only
+// on the colour pair, so it is rendered once per combination and reused.
+//
+// The pair is taken from lipgloss' own output, not hand-assembled, so the
+// bytes stay identical to what Render would have produced.
+//
+// Only for single-line text with no border, margin or padding — that is every
+// table cell, but not a Panel frame.
+func paint(bg, fg lipgloss.Color, bold bool, text string) string {
+	k := paintKey{fg: fg, bg: bg, bold: bold, profile: lipgloss.ColorProfile()}
+
+	paintMu.RLock()
+	wrap, ok := paintCache[k]
+	paintMu.RUnlock()
+
+	if !ok {
+		style := lipgloss.NewStyle().Background(bg).Foreground(fg).Bold(bold)
+		// \x00 never appears in real cell text, so cutting on it splits
+		// Render's output into exactly its prefix and suffix.
+		pre, suf, found := strings.Cut(style.Render("\x00"), "\x00")
+		if !found {
+			// Render did something unexpected; fall back to it wholesale
+			// rather than emit corrupt escapes.
+			return style.Render(text)
+		}
+		wrap = [2]string{pre, suf}
+		paintMu.Lock()
+		paintCache[k] = wrap
+		paintMu.Unlock()
+	}
+	return wrap[0] + text + wrap[1]
+}
+
 func pad(s string, w int) string {
 	d := w - lipgloss.Width(s)
 	switch {
@@ -41,7 +94,7 @@ func padBG(s string, w int, bg lipgloss.Color) string {
 	d := w - lipgloss.Width(s)
 	switch {
 	case d > 0:
-		return s + lipgloss.NewStyle().Background(bg).Render(spaces(d))
+		return s + paint(bg, "", false, spaces(d))
 	case d < 0:
 		return ansi.Truncate(s, w, "")
 	}

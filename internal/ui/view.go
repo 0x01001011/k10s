@@ -754,14 +754,14 @@ func (m *Model) tableBody(inner, rows int) []string {
 	}
 
 	var hdr strings.Builder
-	hdr.WriteString(s(th.Bg).Render(spaces(gutter)))
+	hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gutter)))
 	for k, ci := range keep {
-		hdr.WriteString(s(th.Subtle).Bold(true).Render(fmt.Sprintf("%-*s", widths[k], trunc(cols[ci], widths[k]))))
+		hdr.WriteString(paint(th.Bg, th.Subtle, true, fmt.Sprintf("%-*s", widths[k], trunc(cols[ci], widths[k]))))
 		if k < len(keep)-1 {
-			hdr.WriteString(s(th.Bg).Render(spaces(gap)))
+			hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gap)))
 		}
 	}
-	out := []string{hdr.String(), s(th.Border).Render(strings.Repeat("╌", inner))}
+	out := []string{hdr.String(), paint(th.Bg, th.Border, false, strings.Repeat("╌", inner))}
 
 	// Resolved ONCE per frame, not once per cell: the assertion is cheap but
 	// the row loop runs width × height times.
@@ -782,23 +782,20 @@ func (m *Model) tableBody(inner, rows int) []string {
 		if sel {
 			bg, base = th.SelBg, th.SelFg
 		}
-		st := func(c lipgloss.Color) lipgloss.Style {
-			return lipgloss.NewStyle().Background(bg).Foreground(c)
-		}
 		var b strings.Builder
 		// Gutter: marker, then the dim row number.
 		if sel {
-			b.WriteString(st(th.Accent).Render("▌"))
+			b.WriteString(paint(bg, th.Accent, false, "▌"))
 		} else {
-			b.WriteString(st(bg).Render(" "))
+			b.WriteString(paint(bg, bg, false, " "))
 		}
 		numCol := th.Border
 		if sel {
 			numCol = th.Accent2
 		}
-		b.WriteString(st(bg).Render(" "))
-		b.WriteString(st(numCol).Render(fmt.Sprintf("%*d", numW, i+rowNumBase(m.res().Key))))
-		b.WriteString(st(bg).Render(" "))
+		b.WriteString(paint(bg, bg, false, " "))
+		b.WriteString(paint(bg, numCol, false, fmt.Sprintf("%*d", numW, i+rowNumBase(m.res().Key))))
+		b.WriteString(paint(bg, bg, false, " "))
 
 		for k, ci := range keep {
 			v := ""
@@ -816,18 +813,18 @@ func (m *Model) tableBody(inner, rows int) []string {
 			cell := fmt.Sprintf("%-*s", widths[k], trunc(v, widths[k]))
 			switch {
 			case ci < len(cols) && cols[ci] == nameCol && sel:
-				b.WriteString(st(col).Bold(true).Render(cell))
+				b.WriteString(paint(bg, col, true, cell))
 			case ci < len(metric) && metric[ci] && widths[k] > 2:
 				// Value, then the arrow in the two reserved cells.
 				cell = fmt.Sprintf("%-*s", widths[k]-2, trunc(v, widths[k]-2))
-				b.WriteString(st(col).Render(cell))
-				b.WriteString(st(bg).Render(" "))
+				b.WriteString(paint(bg, col, false, cell))
+				b.WriteString(paint(bg, bg, false, " "))
 				b.WriteString(trendGlyph(th, bg, arrowFor(row, ci)))
 			default:
-				b.WriteString(st(col).Render(cell))
+				b.WriteString(paint(bg, col, false, cell))
 			}
 			if k < len(keep)-1 {
-				b.WriteString(st(bg).Render(spaces(gap)))
+				b.WriteString(paint(bg, bg, false, spaces(gap)))
 			}
 		}
 		out = append(out, m.mark(fmt.Sprintf("row:%d", i), padBG(b.String(), inner, bg)))
