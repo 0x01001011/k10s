@@ -99,7 +99,14 @@ func getZone(id string) zoneBounds {
 // dropped rather than mis-recorded, which is safe because every mark in this
 // package wraps exactly one line.
 func scanZones(frame string) string {
+	// A frame with no escapes at all carries no markers, but the zone table
+	// must still be replaced: with colour off and a modal up nothing is
+	// marked, and leaving the previous frame's zones in place would keep the
+	// covered rows clickable underneath the modal.
 	if !strings.Contains(frame, "\x1b[") {
+		zoneMu.Lock()
+		zoneMap = map[string]zoneBounds{}
+		zoneMu.Unlock()
 		return frame
 	}
 
