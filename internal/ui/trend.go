@@ -50,14 +50,13 @@ func (t trend) arrow(now int) int {
 
 // trendGlyph draws the arrow (or a space to hold the column steady) over bg.
 func trendGlyph(th theme.Theme, bg lipgloss.Color, dir int) string {
-	st := lipgloss.NewStyle().Background(bg)
 	switch dir {
 	case 1:
-		return st.Foreground(th.Err).Render("▲")
+		return paint(bg, th.Err, false, "▲")
 	case -1:
-		return st.Foreground(th.Ok).Render("▼")
+		return paint(bg, th.Ok, false, "▼")
 	}
-	return st.Render(" ")
+	return paint(bg, "", false, " ")
 }
 
 // metricColumn says whether a table column carries live usage that is worth

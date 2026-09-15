@@ -74,9 +74,9 @@ func gauge(th theme.Theme, pct, width int) string {
 	if filled > width {
 		filled = width
 	}
-	on := lipgloss.NewStyle().Background(th.Bg).Foreground(col).Render(strings.Repeat("▰", filled))
-	off := lipgloss.NewStyle().Background(th.Bg).Foreground(th.Border).Render(strings.Repeat("▱", width-filled))
-	num := lipgloss.NewStyle().Background(th.Bg).Foreground(col).Render(fmt.Sprintf("%3d%%", pct))
+	on := paint(th.Bg, col, false, strings.Repeat("▰", filled))
+	off := paint(th.Bg, th.Border, false, strings.Repeat("▱", width-filled))
+	num := paint(th.Bg, col, false, fmt.Sprintf("%3d%%", pct))
 	return on + off + " " + num
 }
 
@@ -910,10 +910,6 @@ func (m *Model) viewActions(w, h int) Block {
 				labCol = th.Err
 			}
 		}
-		st := func(c lipgloss.Color) lipgloss.Style {
-			return lipgloss.NewStyle().Background(bg).Foreground(c)
-		}
-
 		label := a.Label
 		if a.ID == domain.ACordon && strings.Contains(rowStatus(m), "SchedulingDisabled") {
 			label = "Uncordon"
@@ -922,8 +918,9 @@ func (m *Model) viewActions(w, h int) Block {
 		if hovered || flashed {
 			marker = "▌"
 		}
-		row := st(keyCol).Render(marker) + st(th.Border).Render("[") + st(keyCol).Render(a.Key) + st(th.Border).Render("] ") +
-			st(labCol).Bold(flashed).Render(trunc(label, inner-6))
+		row := paint(bg, keyCol, false, marker) + paint(bg, th.Border, false, "[") +
+			paint(bg, keyCol, false, a.Key) + paint(bg, th.Border, false, "] ") +
+			paint(bg, labCol, flashed, trunc(label, inner-6))
 		lines = append(lines, m.mark("act:"+a.ID, padBG(row, inner, bg)))
 	}
 	// Lens verbs sit below the builtin actions, under their own rule: they
@@ -980,22 +977,19 @@ func (m *Model) viewPrompt(l layout) Block {
 	inner := m.w - 2
 
 	var caret, modeTag, modePlain, title, placeholder string
-	sBg := func(c lipgloss.Color) lipgloss.Style {
-		return lipgloss.NewStyle().Background(th.Bg).Foreground(c)
-	}
 	if m.pmode == promptAI && !aiDisabled {
-		caret = sBg(th.Accent2).Bold(true).Render(" ✦ ")
+		caret = paint(th.Bg, th.Accent2, true, " ✦ ")
 		modePlain = "[ AI · " + m.cfg.model + " ]"
-		modeTag = m.mark("aimode", sBg(th.Border).Render("[ ")+sBg(th.Accent2).Render("AI · "+m.cfg.model)+sBg(th.Border).Render(" ]"))
+		modeTag = m.mark("aimode", paint(th.Bg, th.Border, false, "[ ")+paint(th.Bg, th.Accent2, false, "AI · "+m.cfg.model)+paint(th.Bg, th.Border, false, " ]"))
 		title = "Prompt"
 		if focused {
 			title = "Prompt · plain text → AI · /commands still work · esc close"
 		}
 		placeholder = "ask about your cluster…   ·   /settings to change provider/model"
 	} else {
-		caret = sBg(th.Accent).Bold(true).Render(" ❯ ")
+		caret = paint(th.Bg, th.Accent, true, " ❯ ")
 		modePlain = "[ CMD ]"
-		modeTag = m.mark("aimode", sBg(th.Border).Render("[ ")+sBg(th.Accent).Render("CMD")+sBg(th.Border).Render(" ]"))
+		modeTag = m.mark("aimode", paint(th.Bg, th.Border, false, "[ ")+paint(th.Bg, th.Accent, false, "CMD")+paint(th.Bg, th.Border, false, " ]"))
 		title = "Command"
 		if focused {
 			title = "Command · enter run · esc close"
@@ -1014,7 +1008,7 @@ func (m *Model) viewPrompt(l layout) Block {
 		zoomLbl, zoomPlainTag = "shrink", "[ shrink ]"
 	}
 	zoomTag := m.mark("promptzoom",
-		sBg(th.Border).Render("[ ")+sBg(th.Accent2).Render(zoomLbl)+sBg(th.Border).Render(" ]"))
+		paint(th.Bg, th.Border, false, "[ ")+paint(th.Bg, th.Accent2, false, zoomLbl)+paint(th.Bg, th.Border, false, " ]"))
 
 	var body []string
 	if m.promptZoom {
@@ -1027,7 +1021,7 @@ func (m *Model) viewPrompt(l layout) Block {
 	}
 
 	return Panel(th, PanelOpts{
-		Title: title, Tag: zoomTag + sBg(th.Border).Render(" ") + modeTag,
+		Title: title, Tag: zoomTag + paint(th.Bg, th.Border, false, " ") + modeTag,
 		TagPlain: zoomPlainTag + " " + modePlain,
 		Focused:  focused, W: m.w, H: l.promptH,
 	}, body)
@@ -1085,30 +1079,27 @@ func (m *Model) overlaySuggestions(root Block, l layout, sug []SlashCommand) Blo
 		if selected {
 			bg = th.SelBg
 		}
-		st := func(col lipgloss.Color) lipgloss.Style {
-			return lipgloss.NewStyle().Background(bg).Foreground(col)
-		}
 		lead := "  "
 		if selected {
 			lead = "▸ "
 		}
-		row := st(th.Accent).Render(lead) + st(th.Accent).Bold(true).Render(c.Name)
+		row := paint(bg, th.Accent, false, lead) + paint(bg, th.Accent, true, c.Name)
 		// The spelled-out name next to the short one, so ":po" and ":pods"
 		// are visibly the same command rather than two things to remember.
 		// Same accent as the name it belongs to, just not bold — th.Border
 		// is the colour of box lines and left it barely legible.
 		if c.Full != "" && c.Full != c.Name {
-			row += st(bg).Render(" ") + st(th.Accent).Render(c.Full)
+			row += paint(bg, bg, false, " ") + paint(bg, th.Accent, false, c.Full)
 		}
 		if c.Args != "" {
-			row += st(bg).Render(" ") + st(th.Accent2).Render(c.Args)
+			row += paint(bg, bg, false, " ") + paint(bg, th.Accent2, false, c.Args)
 		}
 		desc := trunc(c.Desc, inner-lipgloss.Width(row)-3)
 		gap := inner - lipgloss.Width(row) - lipgloss.Width(desc) - 1
 		if gap < 1 {
 			gap = 1
 		}
-		row += st(bg).Render(spaces(gap)) + st(th.Subtle).Render(desc) + st(bg).Render(" ")
+		row += paint(bg, bg, false, spaces(gap)) + paint(bg, th.Subtle, false, desc) + paint(bg, bg, false, " ")
 		body = append(body, markZone(fmt.Sprintf("sug:%d", i), padBG(row, inner, bg)))
 	}
 
