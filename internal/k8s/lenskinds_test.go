@@ -314,3 +314,34 @@ func TestByGVRKeepsTheFirstPackNotTheLast(t *testing.T) {
 		t.Errorf("byGVR resolved to pack %q, want the first one (%q)", lk.pack.Name, "argolike")
 	}
 }
+
+// Every shipped pack must survive the whole pipeline — parse, then compile
+// into the registry without colliding with a builtin kind OR with another
+// pack. A collision drops the offending pack WHOLE and silently; the only
+// evidence at runtime is LensErr, which nobody reads. This is the regression
+// that must never ship again, so it is asserted on the real builtins rather
+// than on test YAML.
+func TestEveryShippedPackBuildsIntoTheRegistry(t *testing.T) {
+	packs, parseErrs := lens.Builtins()
+	for _, err := range parseErrs {
+		t.Errorf("builtin pack failed to parse: %v", err)
+	}
+	if len(packs) == 0 {
+		t.Fatal("no builtin packs embedded")
+	}
+
+	reg, errs := buildLensReg(packs, builtinTaken())
+	for _, err := range errs {
+		t.Errorf("builtin pack rejected by the registry: %v", err)
+	}
+	if len(reg.packs) != len(packs) {
+		t.Fatalf("registry kept %d of %d shipped packs", len(reg.packs), len(packs))
+	}
+	for _, p := range packs {
+		for _, k := range p.Kinds {
+			if _, ok := reg.byKey[k.Key]; !ok {
+				t.Errorf("pack %q kind %q did not reach the registry", p.Name, k.Key)
+			}
+		}
+	}
+}

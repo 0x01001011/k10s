@@ -1,0 +1,113 @@
+# Rancher — two API groups, not one. Management Clusters live at
+# management.cattle.io/v3; ClusterRepo is NOT in that group, it is
+# catalog.cattle.io/v1. Both are required, so this pack only appears on a
+# Rancher *management* cluster (the one running the rancher deployment) —
+# a downstream cluster serves neither.
+#
+# The whole reason for the Clusters kind: a management Cluster is named
+# c-m-<8 random chars> (mgmtClusterName() = SafeConcatName("c","m",rand[:8]))
+# and the human name exists only in .spec.displayName. kubectl shows you the
+# token; this table shows both side by side.
+#
+# Deliberately NOT declared:
+#   - Waiting condition. Normally "False" on a healthy cluster, so it grades
+#     every row and reads as a noise column; the Ready condition's reason
+#     carries the same information when it matters.
+#   - ClusterRepo .spec.enabled. It is *bool with omitempty, so the common
+#     default-enabled case serializes as absent → a blank cell that looks
+#     like "unknown" rather than "on".
+#   - Rancher `settings` (out of scope per the v0.3.0 spec: a table you read
+#     once and never again).
+#   - Any edge. The two plausible hops — mgmt Cluster → provisioning.cattle.io/v1
+#     clusters, and mgmt Cluster → fleet clusters.fleet.cattle.io — were not
+#     verified at source, and an edge that never resolves reads as "nothing is
+#     connected", which is worse than no edge. Add them with a verification pass.
+name: rancher
+requires:
+  - management.cattle.io/v3
+  - catalog.cattle.io/v1
+
+# ClusterCondition.Status is a v1.ConditionStatus: exactly True/False/Unknown.
+severities:
+  cluster-ready:
+    ok: ["True"]
+    error: ["False"]
+    default: unknown
+  # Provisioned False on an actively provisioning cluster is expected, not
+  # broken — warn, so it sorts above OK but below a Ready failure.
+  cluster-provisioned:
+    ok: ["True"]
+    warn: ["False"]
+    default: unknown
+  repo-downloaded:
+    ok: ["True"]
+    error: ["False"]
+    default: unknown
+
+kinds:
+  - key: rancher-clusters
+    name: Mgmt Clusters
+    short: mcluster
+    group: Rancher
+    gvr: management.cattle.io/v3/clusters
+    # +genclient:nonNamespaced on type Cluster.
+    namespaced: false
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: DISPLAY, path: .spec.displayName}
+      - {header: READY, path: '.status.conditions[?(@.type=="Ready")].status', severity: cluster-ready}
+      - {header: PROVISIONED, path: '.status.conditions[?(@.type=="Provisioned")].status', severity: cluster-provisioned}
+      # .status.provider over .status.driver: both exist, provider is the
+      # friendlier string (driver's values are constants like
+      # rancherKubernetesEngine).
+      - {header: PROVIDER, path: .status.provider}
+      - {header: VERSION, path: .status.version.gitVersion}
+      - {header: NODES, path: .status.nodeCount, format: int}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    # No `delete`. The builtin delete is a plain danger modal — D, Enter — and
+    # deleting a management.cattle.io Cluster deprovisions or detaches an entire
+    # downstream cluster. There is no per-action confirm override for builtin
+    # verbs, so the only way to keep that behind a typed confirmation is not to
+    # offer it here.
+    actions: [describe, yaml, edit]
+
+  - key: rancher-repos
+    name: Cluster Repos
+    short: crepo
+    group: Rancher
+    gvr: catalog.cattle.io/v1/clusterrepos
+    # +kubebuilder:resource:scope=Cluster
+    namespaced: false
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: URL, path: .spec.url}
+      - {header: GITREPO, path: .spec.gitRepo}
+      - {header: BRANCH, path: .spec.gitBranch}
+      - {header: DOWNLOADED, path: '.status.conditions[?(@.type=="Downloaded")].status', severity: repo-downloaded}
+      # Empty for a plain HTTP Helm repo — correct, not broken.
+      - {header: COMMIT, path: .status.commit, truncate: 7}
+      - {header: LAST-DOWNLOAD, path: .status.downloadTime, format: age}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, rancher-repo-refresh, edit, delete]
+
+actions:
+  # .spec.forceUpdate is *metav1.Time, not a bool: the controller re-downloads
+  # the index when the timestamp moves forward, so "now" is the refresh. A
+  # templated leaf renders as a string and RFC3339 is exactly what metav1.Time
+  # unmarshals from.
+  - id: rancher-repo-refresh
+    label: Force index refresh
+    verb: patch
+    confirm: "true"
+    notice: Re-downloads the repository index immediately; on a large git repo this pulls the whole clone again.
+    patch:
+      spec:
+        forceUpdate: "{{.Now}}"
+    # No `ack`. .status.downloadTime would be the right field to watch, but the
+    # ack for a non-annotate verb is a PRESENCE check (lensactions.go: ackWant
+    # returns "" unless the verb is annotate, and LensAck falls back to
+    # lensPathHasValue) — and downloadTime is already populated on every repo
+    # that has ever downloaded an index. The spinner would clear instantly and
+    # identically whether the index was re-pulled or the catalog controller is
+    # wedged, which is the one distinction an ack exists to make. The write
+    # itself is confirmed; claiming the controller handled it is not.

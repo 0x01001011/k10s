@@ -23,10 +23,15 @@ import (
 // mutates parser state — so a compiled path must stay confined to the row
 // builder, which runs only on bubbletea's single event-loop goroutine.
 //
-// Nothing else may reach these. The background count sweep cannot: wantedKinds
-// (counts.go) ranges over builtinKinds, which never holds a lens key. Edge
-// resolution and the ack read deliberately parse a fresh JSONPath per call for
-// the same reason — they run from tea.Cmd goroutines.
+// Nothing else may reach these. The background count sweep DOES handle lens
+// kinds (wantedKinds in counts.go ranges lensOrder as well as builtinKinds, so
+// lens kinds get sidebar badges) — but it reaches them only through gvrFor and
+// a Limit:1 dynamic LIST, and it must never touch lensKind.cols. Calling
+// lensCell from a sweep worker would run FindResults concurrently with the row
+// builder, and countKind's recover() would swallow the resulting panic into a
+// silent wrong count. Edge resolution and the ack read deliberately parse a
+// fresh JSONPath per call for the same reason — they run from tea.Cmd
+// goroutines.
 type lensCol struct {
 	header   string
 	jp       *jsonpath.JSONPath

@@ -220,6 +220,57 @@ func TestCustomResourceCountDoesNotWaitForLiveCalls(t *testing.T) {
 	}
 }
 
+// bigLensCluster builds a synced lens kind large enough that per-cell
+// JSONPath evaluation is clearly measurable against merely counting objects.
+func bigLensCluster(t *testing.T, nObjs int) *Store {
+	t.Helper()
+	objs := make([]runtime.Object, 0, nObjs)
+	for i := 0; i < nObjs; i++ {
+		objs = append(objs, countWidget("default", fmt.Sprintf("widget-%04d", i)))
+	}
+	s, _ := newLensSpyStore(t, objs...)
+	syncKinds(t, s, "cnt-widgets")
+	return s
+}
+
+// TestLensRowCountDoesNotFormatRows is TestRowCountDoesNotFormatRows for the
+// lens row builder, and matters more there: a lens cell is produced by
+// evaluating a compiled JSONPath, so a RowCount that fell through to the row
+// path would run two JSONPaths per object on every repaint — and would do it
+// on the render goroutine, where *jsonpath.JSONPath must stay confined.
+func TestLensRowCountDoesNotFormatRows(t *testing.T) {
+	const nObjs = 2000
+	s := bigLensCluster(t, nObjs)
+
+	rowsAllocs := testing.AllocsPerRun(20, func() {
+		s.Rows("cnt-widgets", domain.AllNamespaces)
+	})
+	countAllocs := testing.AllocsPerRun(20, func() {
+		s.RowCount("cnt-widgets", domain.AllNamespaces)
+	})
+
+	t.Logf("lens Rows: %.0f allocs, lens RowCount: %.0f allocs (%d objects)", rowsAllocs, countAllocs, nObjs)
+
+	if countAllocs > rowsAllocs/4 {
+		t.Errorf("RowCount(lens) allocated %.0f vs Rows %.0f — the sidebar badge appears to be evaluating the pack's JSONPath columns instead of counting cached objects",
+			countAllocs, rowsAllocs)
+	}
+}
+
+func BenchmarkLensRows(b *testing.B) {
+	s := bigLensCluster(&testing.T{}, 2000)
+	for b.Loop() {
+		s.Rows("cnt-widgets", domain.AllNamespaces)
+	}
+}
+
+func BenchmarkLensRowCount(b *testing.B) {
+	s := bigLensCluster(&testing.T{}, 2000)
+	for b.Loop() {
+		s.RowCount("cnt-widgets", domain.AllNamespaces)
+	}
+}
+
 func BenchmarkRowsPods(b *testing.B) {
 	s := bigCluster(&testing.T{}, 2000)
 	for b.Loop() {

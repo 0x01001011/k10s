@@ -2,8 +2,9 @@
 
 A **lens** is a declarative pack that teaches k10s one ecosystem operator:
 which custom resources it owns, what belongs in a table row, and which daily
-actions apply. ArgoCD, Kargo, CNPG, Longhorn and Traefik ship as five lens
-files plus one Go mechanism — not five features.
+actions apply. ArgoCD, Kargo, CNPG, Longhorn and Traefik shipped first; k3s
+Helm, k3s system-upgrade, Fleet, Rancher and VictoriaMetrics followed. Ten lens
+files plus one Go mechanism — not ten features.
 
 The evidence behind every design choice is in [Why this shape](#why-this-shape).
 Read that before changing the schema; most of the obvious simplifications
@@ -58,6 +59,27 @@ kinds:
 (RFC3339 → `4d2h`), `bytes`, `int`, `bool`, or absent (verbatim string).
 `truncate: N` cuts to N runes — git revisions want 7.
 
+**Filter paths work, and you will need one.** The k8s JSONPath dialect supports
+the composite filter form, so the usual condition list reads as one cell:
+
+```yaml
+- {header: READY, path: '.status.conditions[?(@.type=="Ready")].status', severity: node-ready}
+- {header: MESSAGE, path: ".status.conditions[?(@.message!='')].message", truncate: 44}
+```
+
+Quote the whole scalar in YAML and use the *other* quote inside the filter —
+`'…[?(@.type=="Ready")]…'` or `"…[?(@.message!='')]…"`. Most CRDs in this
+release publish no scalar status field at all, only conditions, so this is the
+only way to get a column out of them.
+
+A path may match **zero, one or many** entries. Zero renders an empty cell,
+which is never graded and never an error — identical to a missing field. Many
+render **space-joined in declaration order** (`.status.conditions[*].type` →
+`LatestResolved Complete Validated`), with `truncate` applied to the joined
+string, not per match. So filter down to one match whenever the column is
+graded by a `severity` table: a two-match cell is a string no table lists and
+grades as `unknown`.
+
 `severity` names a mapping table that drives **both** the row colour and the
 sort comparator. Four levels: `ok`, `warn`, `error`, `unknown`. A kind
 declaring any severity column sorts **worst-first by default**, so
@@ -83,7 +105,8 @@ so one value is `ok` and everything else is `warn`.
 
 ### Actions
 
-Five verbs cover every daily action across all five operators. Nothing here
+Five verbs cover every daily action across all ten operators — the five packs
+added since needed no eleventh verb, only `patch`. Nothing here
 shells out; nothing here needs the operator's own CLI, gRPC API or HTTP API.
 
 | Verb | What it does | Used by |
@@ -279,7 +302,7 @@ SubjectAccessReview for the verb `promote` on `stages`. Plain `create` on
 rejection at create time rather than a 403 on the thing you clicked. Surface
 the webhook message verbatim.
 
-## The five lenses
+## The shipped lenses
 
 ### argocd — ship first
 
@@ -429,6 +452,101 @@ headline feature and this file will not pretend otherwise.
 `HTTPRoute.status.parents[].conditions`. Traefik v3 already implements it,
 and one Gateway API lens covers Traefik, Istio, Envoy Gateway and Cilium at
 once. Recommended as a follow-up card.
+
+### k3s-helm
+
+`helm.cattle.io/v1`, two kinds: `helmcharts` (`hc`) and `helmchartconfigs`
+(`hcc`), both namespaced, both read-only (describe/yaml/edit).
+
+`HelmChartStatus` has **no scalar fields** — no `failed`, no `jobCreated`, no
+timestamp anywhere, not even inside a condition — so FAILED is a filter path on
+`conditions[?(@.type=="Failed")].status` and there is no "last sync" column.
+`HelmChartConfig` has no status subresource at all. Helm release revision and
+deployed version live in the release Secret, not on either CR, so VERSION is
+labelled as the *requested* `.spec.version` and nothing pretends otherwise.
+
+`delete` is deliberately absent: it runs a helm-delete Job that uninstalls the
+release while k3s's manifest controller recreates the CR from
+`/var/lib/rancher/k3s/server/manifests` — the destructive half sticks and the
+visible half reverts.
+
+Edges: `helmcharts → batch/v1/jobs` via field `.status.jobName` (read, never
+reconstructed — it flips to `helm-delete-<name>` on deletion),
+`pods → helmcharts` via label `helmcharts.helm.cattle.io/chart`, and
+`helmchartconfigs → helmcharts` via `.metadata.name`.
+
+### k3s-upgrade
+
+`upgrade.cattle.io/v1`, one kind: `plans` (`plan`), namespaced, read-only.
+
+`PlanStatus` is exactly conditions + `latestVersion` + `latestHash` +
+`applying`. No job name, no timestamps — the only times on the object are
+inside conditions. LATEST is `.status.latestVersion`, which the controller
+resolves from either `.spec.channel` or `.spec.version`, so `.spec.version`
+gets no column of its own.
+
+Edges: `plans → jobs` via label `upgrade.cattle.io/plan`, `jobs → nodes` via
+label `upgrade.cattle.io/node`, so `R` twice walks plan → failing job → stuck
+node. The narrower `plan.upgrade.cattle.io/<name>=<latestHash>` key is
+undeclared on purpose: it embeds the plan name, so it cannot be a static edge
+key, and it would hide exactly the leftover failed-version Jobs you came for.
+
+### fleet
+
+`fleet.cattle.io/v1alpha1`, three kinds: `gitrepos`, `bundles`,
+`bundledeployments` — the GitRepo → Bundle → BundleDeployment chain and nothing
+else of Fleet's dozen CRDs.
+
+**A label key in a path needs its dots backslash-escaped:**
+`.metadata.labels.fleet\.cattle\.io/repo-name` resolves;
+`.metadata.labels['fleet.cattle.io/repo-name']` renders empty, because the
+parser splits the bracketed key on its own dots.
+
+Edges are child → parent by label — `bundles → gitrepos` on
+`fleet.cattle.io/repo-name`, `bundledeployments → bundles` on
+`fleet.cattle.io/bundle-name`. Caveat carried in the YAML: the key can express
+only the name half of the verified name+namespace pair, so same-named Bundles
+in two namespaces over-match.
+
+Actions are `fleet-pause` / `fleet-resume`, a merge patch on `spec.paused` with
+a literal YAML bool — `RenderTree` only templates string leaves. Force-resync
+is not shipped for the same reason: `.spec.forceSyncGeneration` is an `int64`
+that must be written as current+1, and a templated leaf would send `"3"`.
+
+### rancher
+
+Two group/versions, so the pack appears only on a Rancher **management**
+cluster: `management.cattle.io/v3` (`clusters`, short `mcluster`) and
+`catalog.cattle.io/v1` (`clusterrepos`, short `crepo`). Both cluster-scoped.
+
+One action: `rancher-repo-refresh`, patching `.spec.forceUpdate` with
+`{{.Now}}` (it is a `*metav1.Time`), confirmed, with a notice that it re-pulls
+a possibly large git clone and an `ack` on `.status.downloadTime`.
+
+No edges ship. Management Cluster → `provisioning.cattle.io/v1` clusters and
+→ `clusters.fleet.cattle.io` are the obvious hops, and neither could be
+verified — an unverified edge is a wrong answer with a confident face. Note the
+name clash while you are here: `clusters` exists in the management, fleet and
+provisioning groups and they are three different objects.
+
+### victoriametrics
+
+`operator.victoriametrics.com/v1beta1`, four kinds: `vmagents`, `vmalerts`,
+`vmrules`, `vmservicescrapes`. STATUS is `.status.updateStatus` everywhere,
+graded by one table over the five upstream constants (`operational` ok;
+`expanding`/`paused`/`ignored` warn; `failed` error).
+
+`.status.status` and `.status.lastSyncError` are the pre-v0.51.0 names and are
+empty on any current operator, so they are not shown. PAUSED and the
+pause/resume actions exist only on VMAgent and VMAlert, whose specs embed
+`CommonAppsParams`; VMRule and VMServiceScrape have no such field to patch.
+REPLICAS on VMAlert is `.spec.replicaCount` — desired, not observed, because
+the status carries neither.
+
+Edges are label edges on `app.kubernetes.io/instance`, from pods and from
+apps/v1 deployments/statefulsets/daemonsets (a VMAgent runs as any of the
+three). OwnerRef edges were tried first and dropped as unverifiable. That label
+is generic enough to over-match on a busy namespace; the YAML says so.
 
 ## Dependencies
 
