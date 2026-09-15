@@ -52,6 +52,14 @@ var demoLensRows = map[string][][]string{
 		{"pvc-04c8fe62", "detached", "unknown", "10Gi", "", "legacy-dump", "", "v1", "180d"},
 		{"pvc-8f21a0c4", "attached", "healthy", "50Gi", "ip-10-0-2-88", "orders-data", "orders-db-1", "v1", "63d"},
 	},
+	// PAUSED true sits on the `paused` row on purpose: it is the state the
+	// pack's own pause verb produces, so the table and the verbs pane agree.
+	"vm-agents": {
+		{"vmagent-edge", "failed", "1", "1", "false", "9d"},
+		{"vmagent-shared", "expanding", "4", "8", "false", "26d"},
+		{"vmagent-legacy", "paused", "1", "1", "true", "88d"},
+		{"vmagent-prod", "operational", "2", "4", "false", "26d"},
+	},
 	"traefik-routes": {
 		{"checkout", "websecure", "Host(`shop.example.com`)", "checkout-api", "rate-limit", "shop-tls", "18d"},
 		{"internal-admin", "web", "Host(`admin.internal`)", "admin-ui", "", "", "90d"},

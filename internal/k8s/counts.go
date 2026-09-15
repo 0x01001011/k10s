@@ -150,19 +150,33 @@ func (s *Store) wantedKinds(ns string) []domain.Kind {
 	}
 	s.cntMu.RUnlock()
 
+	// Lens kinds are swept exactly like builtins: countKindUnsafe resolves
+	// them through gvrFor and asks for the same one-item page. Leaving them
+	// out is what kept their badges blank until the kind was opened, which
+	// made "this operator isn't installed here" indistinguishable from
+	// "nothing is wrong". The pack's own gate already removed kinds whose
+	// CRDs are absent; one that still refuses goes quiet via cntGone below,
+	// same as a Forbidden builtin.
+	var lensOrder []domain.Kind
+	if r := s.lensSnapshot(); r != nil {
+		lensOrder = r.order
+	}
+
 	var out []domain.Kind
-	for _, k := range builtinKinds {
-		if !want[k.Key] {
-			continue
+	for _, set := range [][]domain.Kind{builtinKinds, lensOrder} {
+		for _, k := range set {
+			if !want[k.Key] {
+				continue
+			}
+			// An open kind already has exact numbers from its cache.
+			if s.isStarted(k.Key, ns) {
+				continue
+			}
+			if at, skip := gone[k.Key]; skip && now.Sub(at) < countGoneTTL {
+				continue
+			}
+			out = append(out, k)
 		}
-		// An open kind already has exact numbers from its cache.
-		if s.isStarted(k.Key, ns) {
-			continue
-		}
-		if at, skip := gone[k.Key]; skip && now.Sub(at) < countGoneTTL {
-			continue
-		}
-		out = append(out, k)
 	}
 	return out
 }

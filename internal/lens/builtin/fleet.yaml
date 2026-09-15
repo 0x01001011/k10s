@@ -1,0 +1,212 @@
+# Fleet (Rancher Continuous Delivery) — fleet.cattle.io/v1alpha1. All 14 Fleet
+# CRDs ship exactly one version, v1alpha1, served and stored; there is no
+# v1beta1 to fall back to, so one `requires` entry gates the whole pack.
+#
+# 14 CRDs exist; three are declared, because the daily question is "which
+# bundle failed on which cluster" and that question is answered by walking
+# GitRepo -> Bundle -> BundleDeployment. Deliberately omitted:
+#   - clusters.fleet.cattle.io / clustergroups: a Fleet Cluster is a mirror of
+#     a registration, and its useful column (.status.display.readyBundles) is
+#     the same number a Bundle row already shows per cluster. Note for whoever
+#     adds it: clusters.fleet.cattle.io is a DIFFERENT resource from
+#     clusters.management.cattle.io (the rancher pack) — gate by full group.
+#   - contents, imagescans, bundlenamespacemappings, gitreposrestrictions and
+#     friends: configuration you read once, not status you watch.
+#
+# Deliberately NOT shipped, so nobody re-adds them:
+#   - Force-resync. The field is real (.spec.forceSyncGeneration) but it is an
+#     int64 and forcing a sync means writing current+1 — a templated leaf, and
+#     RenderTree renders templated leaves as STRINGS. The patch would send
+#     "forceSyncGeneration": "3" into an int64 and the API server would reject
+#     it. Not expressible as a plain write until RenderTree grows numeric
+#     leaves. Pause/unpause below is a literal bool and is safe.
+#   - Any "results truncated" indicator on .status.summary.nonReadyResources.
+#     The list is silently capped at 10 by summary.IncrementState, and there is
+#     no flag for that on BundleSummary. .status.incompleteState exists only on
+#     BundleDeployment and means something else (its own nonReadyStatus /
+#     modifiedStatus were truncated), so it is not shown as a Bundle column.
+#   - .status.display.readyClusters on GitRepo — does not exist. GitRepo has
+#     readyBundleDeployments; readyClusters is a Bundle-only key. A column
+#     reading it would be empty on every row forever.
+#   - .status.summary.nonReadyResources[*].bundleState as a state column: the
+#     JSON key is bundleState, not state, and more importantly it is a repeated
+#     path, so it would render as a space-joined list of up to ten states.
+name: fleet
+requires:
+  - fleet.cattle.io/v1alpha1
+
+# The BundleState constants, verbatim: Ready, NotReady, WaitApplied,
+# ErrApplied, WaitingForDependency, OutOfSync, Pending, Modified. The display
+# state is GetSummaryState(), i.e. the WORST state across the summary, which is
+# exactly what should sort to the top.
+#
+# GitUpdating is NOT a BundleState — StatusDisplay.State is documented as "the
+# state of the resource, e.g. GitUpdating or the maximal BundleState", and the
+# status controller writes it whenever the git job is not Current. Left to
+# `default: unknown` it would rank above every healthy row, so every GitRepo
+# would sort near the top for the duration of each sync and read as "cannot
+# tell". A clone in progress is a transient, not a doubt: warn.
+severities:
+  bundle-state:
+    ok: [Ready]
+    warn: [WaitApplied, WaitingForDependency, Pending, GitUpdating]
+    error: [NotReady, ErrApplied, OutOfSync, Modified]
+    default: unknown
+  # .status.ready is a plain bool, rendered by format: bool.
+  bd-ready:
+    ok: ["true"]
+    error: ["false"]
+    default: unknown
+  # paused is `bool json:",omitempty"`, so the unpaused case serializes as
+  # ABSENT, not "false" — an empty cell, which lensRows skips rather than
+  # grading. Only an explicitly paused object is graded, and it is warn, not
+  # error: paused is a decision somebody made, it just needs to be visible,
+  # because a paused GitRepo looks identical to a healthy idle one.
+  paused:
+    warn: ["true"]
+    ok: ["false"]
+    default: unknown
+
+kinds:
+  - key: fleet-gitrepos
+    name: GitRepos
+    short: gitrepo
+    group: Fleet
+    gvr: fleet.cattle.io/v1alpha1/gitrepos
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # No REPO column. .spec.repo is a clone URL, and at the reference width
+      # (140 cols, `just shot`) fitCols leaves it 8 cells — every row renders
+      # the identical `https:/…`, while the columns that do discriminate lose
+      # the width to it. The repo is one `d` away and the GitRepo's own name is
+      # derived from it in practice.
+      - {header: BRANCH, path: .spec.branch}
+      # .status.commit is the hash of the last git job run — it lags
+      # .status.webhookCommit / .status.pollingCommit, which is the point:
+      # this is what was actually deployed.
+      - {header: COMMIT, path: .status.commit, truncate: 7}
+      # "%d/%d", written by the controller. GitRepo counts BundleDeployments
+      # here, not clusters.
+      - {header: READY-BD, path: .status.display.readyBundleDeployments}
+      - {header: STATE, path: .status.display.state, severity: bundle-state}
+      - {header: PAUSED, path: .spec.paused, format: bool, severity: paused}
+      - {header: MESSAGE, path: .status.display.message, truncate: 60}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    # No `delete`. k10s's builtin delete is a plain danger modal — D, Enter —
+    # and deleting a GitRepo garbage-collects every resource it deployed across
+    # every target cluster. That is a two-keystroke outage, and the schema has
+    # no per-action confirm override for builtin verbs. Delete it with kubectl,
+    # where the blast radius is at least typed out.
+    actions: [describe, yaml, fleet-pause, fleet-resume, edit]
+
+  - key: fleet-bundles
+    name: Bundles
+    short: bundle
+    group: Fleet
+    gvr: fleet.cattle.io/v1alpha1/bundles
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # No REPO column, though the label is real and the edge below uses it:
+      # WORST-CLUSTER is the one answer this table exists to give, and at the
+      # reference width every cell it does not get goes to a column that is
+      # constant down the page. The parent GitRepo is one `R` away.
+      #
+      # (If you re-add it, the backslashes are load bearing — k8s jsonpath
+      # splits an unescaped key on its dots and the column renders empty on
+      # every row: .metadata.labels.fleet\.cattle\.io/repo-name)
+      #
+      # "%d/%d" ready/desired CLUSTERS — this key exists on Bundle only.
+      - {header: READY, path: .status.display.readyClusters}
+      - {header: STATE, path: .status.display.state, severity: bundle-state}
+      # This is the whole reason the Bundles table exists. On a BUNDLE, and
+      # only on a Bundle, summary.nonReadyResources[].name is
+      # "<cluster-namespace>/<cluster-name>" — target.Summary() increments the
+      # state keyed by the cluster. On a GitRepo or a Fleet Cluster the very
+      # same field is a bare BundleDeployment name, which is why this column is
+      # not repeated on those kinds under this header.
+      #
+      # [0] is the first non-ready target, not the worst one, and the list is
+      # capped at 10 with no truncation flag. It is a pointer into the failure,
+      # not a census; an empty cell means nothing is failing.
+      #
+      # It is given the width because a truncated cluster reference answers
+      # nothing: Fleet registers every Rancher cluster into `fleet-default`, so
+      # the namespace half is identical on every row and the cut falls exactly
+      # on the cluster name. The failure message is one `d` away.
+      - {header: WORST-CLUSTER, path: ".status.summary.nonReadyResources[0].name"}
+      - {header: PAUSED, path: .spec.paused, format: bool, severity: paused}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    # No pause/resume on a Bundle, and no delete. Pausing a Bundle DOES take
+    # effect and is then silently reverted: the git job runs `fleet apply` on
+    # every sync and apply's save() replaces the whole Bundle spec, so the next
+    # commit — or any GitRepo spec change — restores paused:false with no event
+    # and no message. The operator believes the deployment is frozen while
+    # Fleet is applying again. Pause the GitRepo instead; that one sticks.
+    # (A hand-made Bundle with no GitRepo would keep the pause, but it is not
+    # worth a button that lies on every Bundle Fleet actually manages.)
+    actions: [describe, yaml, edit]
+
+  - key: fleet-bundledeployments
+    name: BundleDeployments
+    short: bd
+    group: Fleet
+    gvr: fleet.cattle.io/v1alpha1/bundledeployments
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # A BundleDeployment lives in the downstream CLUSTER's namespace, not in
+      # the Bundle's, so the parent needs both labels to be identified —
+      # bundle-name alone cross-links same-named bundles from different
+      # namespaces. Hence two columns, not one.
+      - {header: BUNDLE, path: .metadata.labels.fleet\.cattle\.io/bundle-name}
+      - {header: BUNDLE-NS, path: .metadata.labels.fleet\.cattle\.io/bundle-namespace}
+      - {header: READY, path: .status.ready, format: bool, severity: bd-ready}
+      - {header: DEPLOYED, path: .status.display.deployed}
+      - {header: MONITORED, path: .status.display.monitored}
+      - {header: STATE, path: .status.display.state, severity: bundle-state}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events, edit, delete]
+
+actions:
+  # spec.paused is a literal YAML bool on purpose: RenderTree only rewrites
+  # string leaves, so a bare true/false falls through unchanged and reaches the
+  # merge patch as a JSON bool. Templating it would send the string "true" into
+  # a Go bool field and the API server would reject the patch.
+  - id: fleet-pause
+    label: Pause (stop reconciling)
+    verb: patch
+    confirm: "true"
+    notice: Fleet stops applying changes to this object's targets. Already-deployed resources stay as they are; drift is no longer corrected.
+    patch:
+      spec:
+        paused: true
+    ack: .spec.paused
+
+  - id: fleet-resume
+    label: Resume
+    verb: patch
+    confirm: "true"
+    patch:
+      spec:
+        paused: false
+
+edges:
+  # Both label keys are set by Fleet on the CHILD, and both are matched on
+  # their VALUE against the parent's name. Declared one-way, navigated both.
+  #
+  # These legitimately cross namespaces: a BundleDeployment sits in the
+  # downstream cluster's namespace while its Bundle sits in the GitRepo's. The
+  # edge key can only carry bundle-name, not the bundle-namespace half of the
+  # pair, so a Bundle named the same in two namespaces will over-match here.
+  # The alternative — no edge at all — hides the one hop that answers the daily
+  # question, and an unloaded neighbour is honestly marked "(not loaded)".
+  - from: fleet.cattle.io/v1alpha1/bundles
+    to: fleet.cattle.io/v1alpha1/gitrepos
+    via: label
+    key: fleet.cattle.io/repo-name
+  - from: fleet.cattle.io/v1alpha1/bundledeployments
+    to: fleet.cattle.io/v1alpha1/bundles
+    via: label
+    key: fleet.cattle.io/bundle-name

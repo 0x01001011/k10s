@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/0x01001011/k10s/internal/domain"
+	"github.com/0x01001011/k10s/internal/lens"
 )
 
 // listSpy counts the badge-count requests the sweeper actually sends, which
@@ -86,6 +88,115 @@ func newSpyStore(t *testing.T, objs ...runtime.Object) (*Store, *listSpy) {
 	s.cntRunning = true // keep the real loop out of the test's way
 	s.cntMu.Unlock()
 	return s, spy
+}
+
+// countLensGVR / countLensPack are a synthetic lens pack, declared here so a
+// shipped pack's edits cannot break the sweep's tests.
+var countLensGVR = schema.GroupVersionResource{Group: "cnt.example.com", Version: "v1", Resource: "widgets"}
+
+var countLensPack = lens.Pack{
+	Name:     "countlens",
+	Requires: []string{"cnt.example.com/v1"},
+	Kinds: []lens.Kind{{
+		Key: "cnt-widgets", Name: "Widgets", Short: "cntw", Group: "Cnt",
+		GVR: "cnt.example.com/v1/widgets", Namespaced: true,
+		Columns: []lens.Column{
+			{Header: "NAME", Path: ".metadata.name"},
+			{Header: "PHASE", Path: ".status.phase"},
+		},
+	}},
+}
+
+func countWidget(ns, name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cnt.example.com/v1",
+		"kind":       "Widget",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"status":     map[string]any{"phase": "Healthy"},
+	}}
+}
+
+// newLensSpyStore is newSpyStore for a Store serving one lens pack. The
+// registry is published directly rather than through the discovery gate: the
+// sweep is what is under test, not pack loading.
+func newLensSpyStore(t *testing.T, objs ...runtime.Object) (*Store, *listSpy) {
+	t.Helper()
+	spy := &listSpy{calls: map[string]int{}, fail: map[string]error{}}
+
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{countLensGVR: "WidgetList"},
+		objs...,
+	)
+	dyn.PrependReactor("list", "*", spy.react)
+
+	c := &Client{
+		RestConfig:     &rest.Config{Host: "https://fake"},
+		Clientset:      fake.NewSimpleClientset(),
+		Dynamic:        dyn,
+		Metrics:        metricsfake.NewSimpleClientset(),
+		CurrentContext: "test-context",
+	}
+	s, err := newStoreFrom(c, apiextfake.NewSimpleClientset())
+	if err != nil {
+		t.Fatalf("newStoreFrom: %v", err)
+	}
+	t.Cleanup(s.Close)
+
+	waitLens(t, s) // the gate is the only other writer of lensSnap
+	reg, errs := buildLensReg([]lens.Pack{countLensPack}, builtinTaken())
+	if len(errs) > 0 {
+		t.Fatalf("buildLensReg: %v", errs)
+	}
+	s.lensSnap.Store(reg)
+
+	s.cntMu.Lock()
+	s.cntRunning = true
+	s.cntMu.Unlock()
+	return s, spy
+}
+
+// A lens kind's badge has to arrive the same way a builtin's does: from the
+// background sweep, before the kind is ever opened. Without it every operator
+// kind reads blank, and "this operator isn't installed here" looks exactly
+// like "nothing is broken".
+func TestSweepCountsLensKinds(t *testing.T) {
+	s, spy := newLensSpyStore(t, countWidget("default", "w-1"))
+
+	s.RowCount("cnt-widgets", "default") // what viewList does for each row
+	s.sweepCounts("default")
+
+	if n := spy.count("widgets"); n != 1 {
+		t.Fatalf("a lens kind on screen got %d count requests, want exactly 1", n)
+	}
+	if got := s.RowCount("cnt-widgets", "default"); got != 1 {
+		t.Errorf("RowCount(cnt-widgets) = %d after a sweep, want 1", got)
+	}
+	if s.isStarted("cnt-widgets", "default") {
+		t.Error("counting a lens kind started its informer — the badge must stay watch-free")
+	}
+}
+
+// A lens kind the cluster refuses must go quiet exactly like a builtin one:
+// the pack gate can be passed by a cluster that then 404s the resource, and
+// re-asking every thirty seconds is noise and nothing else.
+func TestSweepForgetsRefusedLensKinds(t *testing.T) {
+	s, spy := newLensSpyStore(t)
+	spy.mu.Lock()
+	spy.fail["widgets"] = apierrors.NewNotFound(
+		schema.GroupResource{Group: "cnt.example.com", Resource: "widgets"}, "")
+	spy.mu.Unlock()
+
+	s.RowCount("cnt-widgets", "default")
+	s.sweepCounts("default")
+	s.sweepCounts("default")
+
+	if n := spy.count("widgets"); n != 1 {
+		t.Errorf("a refused lens kind was asked %d times, want 1", n)
+	}
+	if got := s.RowCount("cnt-widgets", "default"); got != domain.CountUnknown {
+		t.Errorf("RowCount(cnt-widgets) = %d, want CountUnknown — no badge beats a wrong one", got)
+	}
 }
 
 // The sidebar decides what gets counted: a kind nobody drew a badge for

@@ -295,14 +295,17 @@ func TestLoadTreatsAMissingDirectoryAsNormal(t *testing.T) {
 	}
 }
 
-// The five shipped packs are the whole point of the mechanism; a typo in
+// The shipped packs are the whole point of the mechanism; a typo in
 // one of them is a build-time bug, not a user's problem.
 func TestBuiltinPacksAllParse(t *testing.T) {
 	packs, errs := Builtins()
 	for _, err := range errs {
 		t.Errorf("builtin pack failed to parse: %v", err)
 	}
-	for _, want := range []string{"argocd", "cnpg", "kargo", "longhorn", "traefik"} {
+	for _, want := range []string{
+		"argocd", "cnpg", "fleet", "k3s-helm", "k3s-upgrade",
+		"kargo", "longhorn", "rancher", "traefik", "victoriametrics",
+	} {
 		if !hasPack(packs, want) {
 			t.Errorf("builtin pack %q missing", want)
 		}

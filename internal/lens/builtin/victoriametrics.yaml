@@ -1,0 +1,199 @@
+# VictoriaMetrics operator — operator.victoriametrics.com/v1beta1, verified at
+# operator v0.74.1. The newer operator.victoriametrics.com/v1 group exists on a
+# modern operator but holds only the vl*/vt*/vmanomaly kinds; VMAgent, VMAlert,
+# VMRule and VMServiceScrape are served at v1beta1 ONLY (one version each,
+# served+stored, scope Namespaced). v1 is deliberately absent from `requires`:
+# it gates nothing here, and on an older operator it would make the whole pack
+# invisible.
+#
+# ~20 CRDs exist; four are declared — the agent that scrapes, the alerter, the
+# rules it evaluates, and the scrape config that is silently ignored when no
+# VMAgent selects it. VMSingle/VMCluster/VMAlertmanager and friends are omitted:
+# their daily question is "is the StatefulSet up", which the workload views
+# already answer.
+#
+# STATUS is .status.updateStatus, NOT .status.status. The field was renamed
+# (along with lastSyncError -> reason) between operator v0.50.0 and v0.51.0.
+# No compatibility column is shipped for the old names: it would render empty
+# on every current cluster, and the paths here render empty on a <= v0.50.0
+# operator, which is four years stale.
+#
+# Deliberately NOT shipped, so nobody re-adds them:
+#   - ownerRef edges child -> VMAgent/VMAlert. AsOwner() builds the reference
+#     from the CR's TypeMeta, and nothing in the operator demonstrably populates
+#     TypeMeta before that call, so the emitted ownerReferences[].apiVersion
+#     could not be verified at source. The label edges below are verified end to
+#     end instead: label construction -> object metadata -> apply site.
+#   - A VMRule rule count or alert-name column. Rule.Alert and Rule.Record both
+#     carry +kubebuilder:default="", so recording rules store alert: "" and the
+#     cell would be ragged and half blank; a *count* is not expressible at all,
+#     since k8s jsonpath has no length() and Column.Format offers only
+#     age|bytes|int|bool. GROUPS (a required field, always populated) is shipped
+#     instead.
+#   - .status.replicas / .status.availableReplicas on VMAlert — they do not
+#     exist. VMAlertStatus is StatusMetadata + lastAppliedSpec, nothing else.
+#     Its REPLICAS column reads .spec.replicaCount, i.e. DESIRED, not actual.
+#   - PAUSED, and pause/resume, on VMRule and VMServiceScrape. Paused lives in
+#     CommonAppsParams, which neither spec embeds: the column would be empty
+#     forever and the patch would write a field the CRD schema prunes.
+#   - .spec.discoveryRole on VMServiceScrape — optional with no defaulted value
+#     in the stored object, so it is blank on the overwhelming majority of
+#     scrapes.
+#   - Anything reading VictoriaMetrics' own HTTP API (/targets, /api/v1/rules).
+#     A lens talks to the Kubernetes API and nothing else.
+#
+# None of the four CRDs declare shortNames upstream; the `short` aliases below
+# are k10s's own, not kubectl parity.
+name: victoriametrics
+requires:
+  - operator.victoriametrics.com/v1beta1
+
+# The complete UpdateStatus constant set — expanding, operational, failed,
+# paused, ignored — and every one is reachable: reconcile/status.go writes
+# ignored/failed/operational and switches over all five, panicking on anything
+# outside them. So this table is exhaustive and `default: unknown` only ever
+# fires on an object the operator has not touched yet.
+#
+# `ignored` on a VMRule/VMServiceScrape means "no VMAgent or VMAlert selects
+# me" — the rule exists and does nothing, which is a warning, not an error.
+severities:
+  vm-update:
+    ok: ["operational"]
+    warn: ["expanding", "paused", "ignored"]
+    error: ["failed"]
+    default: unknown
+
+kinds:
+  - key: vm-agents
+    name: VMAgents
+    short: vmagent
+    group: VictoriaMetrics
+    gvr: operator.victoriametrics.com/v1beta1/vmagents
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: STATUS, path: .status.updateStatus, severity: vm-update}
+      # .status.shards and .status.replicas are the operator's own scale
+      # subresource status paths (specpath .spec.shardCount, statuspath
+      # .status.shards). format: int is mandatory — JSON numbers decode to
+      # float64 and would render as 3e+00.
+      - {header: SHARDS, path: .status.shards, format: int}
+      - {header: REPLICAS, path: .status.replicas, format: int}
+      - {header: PAUSED, path: .spec.paused, format: bool}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events, vm-pause, vm-resume, edit, delete]
+
+  - key: vm-alerts
+    name: VMAlerts
+    short: vmalert
+    group: VictoriaMetrics
+    gvr: operator.victoriametrics.com/v1beta1/vmalerts
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: STATUS, path: .status.updateStatus, severity: vm-update}
+      # DESIRED replicas. VMAlertStatus carries no counters at all — see the
+      # header block. Do not "fix" this to .status.replicas.
+      - {header: REPLICAS, path: .spec.replicaCount, format: int}
+      - {header: PAUSED, path: .spec.paused, format: bool}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events, vm-pause, vm-resume, edit, delete]
+
+  - key: vm-rules
+    name: VMRules
+    short: vmrule
+    group: VictoriaMetrics
+    gvr: operator.victoriametrics.com/v1beta1/vmrules
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: STATUS, path: .status.updateStatus, severity: vm-update}
+      # .spec.groups and RuleGroup.Name are both required (no omitempty), so
+      # this is the one VMRule field guaranteed populated on every object. It
+      # is a repeated path: multiple groups render space-separated.
+      - {header: GROUPS, path: ".spec.groups[*].name"}
+      # Upstream's own "Sync Error" printer column. It is also set while
+      # updateStatus is operational — "applied on N parent(s), failed on M: …"
+      # — so it carries information on green rows too, which is why it is not
+      # graded and is worth the width.
+      - {header: REASON, path: .status.reason, truncate: 60}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events, edit, delete]
+
+  - key: vm-servicescrapes
+    name: VMServiceScrapes
+    short: vmss
+    group: VictoriaMetrics
+    gvr: operator.victoriametrics.com/v1beta1/vmservicescrapes
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: STATUS, path: .status.updateStatus, severity: vm-update}
+      - {header: JOB LABEL, path: .spec.jobLabel}
+      - {header: REASON, path: .status.reason, truncate: 60}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events, edit, delete]
+
+actions:
+  # spec.paused is a literal YAML bool on purpose: RenderTree only rewrites
+  # string leaves, so a bare true/false reaches the merge patch as a JSON bool.
+  # Templating it would send the string "true" into a Go bool and be rejected.
+  #
+  # `ack` reads back the field we wrote, NOT .status.updateStatus: the operator
+  # setting updateStatus to "paused" on the next reconcile is a status value,
+  # not an acknowledgement of this request, and would report success for any
+  # object that was already paused. Resume carries no ack at all — it writes
+  # false, and lensPathHasValue treats "false" as absent, so an ack there could
+  # never resolve.
+  - id: vm-pause
+    label: Pause (stop reconciling)
+    verb: patch
+    confirm: "true"
+    notice: The operator stops reconciling this object. The running Deployment/StatefulSet keeps serving with its current config; spec changes are not applied and drift is not corrected until you resume.
+    patch:
+      spec:
+        paused: true
+    ack: .spec.paused
+
+  - id: vm-resume
+    label: Resume
+    verb: patch
+    confirm: "true"
+    patch:
+      spec:
+        paused: false
+
+edges:
+  # VMAgent.SelectorLabels()/VMAlert.SelectorLabels() set
+  # app.kubernetes.io/instance: <cr.Name> on the workload (FinalLabels) and on
+  # its pods (PodLabels). Matched on the value against the CR's name.
+  #
+  # CAVEAT: app.kubernetes.io/instance is a generic label, so an unrelated
+  # workload in the same namespace whose instance label happens to equal a
+  # VMAgent's name will false-positive here. Narrowing needs a two-key label
+  # match (instance + app.kubernetes.io/name), which Edge cannot express.
+  # Accepted: the hop from a crashlooping pod back to the CR that owns it is
+  # the one people actually walk.
+  #
+  # VMAgent runs as a Deployment, a StatefulSet (shards/persistence) or a
+  # DaemonSet (daemonSetMode), hence three workload edges rather than one.
+  - from: v1/pods
+    to: operator.victoriametrics.com/v1beta1/vmagents
+    via: label
+    key: app.kubernetes.io/instance
+  - from: v1/pods
+    to: operator.victoriametrics.com/v1beta1/vmalerts
+    via: label
+    key: app.kubernetes.io/instance
+  - from: apps/v1/deployments
+    to: operator.victoriametrics.com/v1beta1/vmagents
+    via: label
+    key: app.kubernetes.io/instance
+  - from: apps/v1/statefulsets
+    to: operator.victoriametrics.com/v1beta1/vmagents
+    via: label
+    key: app.kubernetes.io/instance
+  - from: apps/v1/daemonsets
+    to: operator.victoriametrics.com/v1beta1/vmagents
+    via: label
+    key: app.kubernetes.io/instance

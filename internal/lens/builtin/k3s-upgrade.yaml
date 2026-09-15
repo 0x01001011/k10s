@@ -1,0 +1,94 @@
+# system-upgrade-controller — upgrade.cattle.io/v1, the group k3s and RKE2
+# ship for node upgrades. One CRD exists (Plan, Namespaced) and this pack
+# declares it; the Jobs and Pods the controller spawns are ordinary batch
+# objects reached through the edges below, not kinds of their own.
+#
+# PlanStatus has exactly four fields upstream — conditions, latestVersion,
+# latestHash, applying (types.go:94-111). Consequences, so nobody re-adds
+# these:
+#   * .status.jobName DOES NOT EXIST on a Plan. That field is
+#     helm-controller's HelmChart. Plan → Job is a label selector, which is
+#     also correct for the fan-out: one Plan makes one Job per node.
+#   * There is no start/finish timestamp on the status. The only times live
+#     inside a condition (lastUpdateTime / lastTransitionTime), so a bare
+#     .status.lastUpdateTime column renders empty on every row forever.
+#   * There are exactly three condition types — LatestResolved, Validated,
+#     Complete (types.go:19-23). Ready and Progressing are never set;
+#     a column filtering on them is an empty cell, not a missing feature.
+name: k3s-upgrade
+requires:
+  - upgrade.cattle.io/v1
+
+severities:
+  # Condition statuses are the usual "True"/"False"/"Unknown" strings.
+  # Complete=False is both "still rolling" and "a Job failed"
+  # (PlanComplete.SetError(plan, "JobFailed", …), handle_batch.go:97) —
+  # the status carries no way to tell them apart, so it grades as warn and
+  # the MESSAGE column says which.
+  complete:
+    ok: ["True"]
+    warn: ["False"]
+    default: unknown
+  # LatestResolved=False means the channel server could not be reached or
+  # the version does not exist: nothing will ever roll. That is an error.
+  resolved:
+    ok: ["True"]
+    error: ["False"]
+    default: unknown
+
+kinds:
+  - key: k3s-upgrade-plans
+    name: Upgrade Plans
+    short: plan
+    group: System Upgrade
+    gvr: upgrade.cattle.io/v1/plans
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CHANNEL, path: .spec.channel}
+      # .spec.version is deliberately not a column of its own: whether the
+      # plan pins a version or follows a channel, the controller resolves
+      # both into .status.latestVersion, which is what is actually being
+      # applied. LATEST empty with CHANNEL set is the unresolved case, and
+      # RESOLVED already grades it.
+      - {header: LATEST, path: .status.latestVersion}
+      - {header: RESOLVED, path: '.status.conditions[?(@.type=="LatestResolved")].status', severity: resolved}
+      - {header: COMPLETE, path: '.status.conditions[?(@.type=="Complete")].status', severity: complete}
+      # The whole point of the table: .status.applying is the []string of
+      # node names the roll is on right now, cleared to nil when nothing is
+      # selected (handle_upgrade.go:170-185). Non-empty = a roll is live,
+      # and these are the nodes to look at.
+      - {header: APPLYING, path: ".status.applying[*]"}
+      # Any condition carrying a message — Validated=False explains a bad
+      # spec here, JobFailed explains a stuck roll. Filtering on the message
+      # rather than the type is upstream's own printer column.
+      - {header: MESSAGE, path: ".status.conditions[?(@.message!='')].message", truncate: 44}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    # Read-only: a Plan is edited by changing the channel or version, and an
+    # accidental edit re-rolls every node in the cluster.
+    actions: [describe, yaml, events]
+
+edges:
+  # Both label keys are constants on the controller, applied to the Job (and
+  # its Pod) at creation: LabelPlan = "upgrade.cattle.io/plan" carrying
+  # plan.Name, LabelNode = "upgrade.cattle.io/node" carrying node.Name
+  # (constants.go:22-25, job.go:167-196). Declared one-way, walked both, so
+  # R from a Plan lands on its Jobs and R again on the node one is stuck on.
+  #
+  # The Job is created in the Plan's own namespace (job.go:185), which is
+  # what makes this hop land on the right object even when two clusters'
+  # plans share a name.
+  - from: batch/v1/jobs
+    to: upgrade.cattle.io/v1/plans
+    via: label
+    key: upgrade.cattle.io/plan
+  - from: batch/v1/jobs
+    to: v1/nodes
+    via: label
+    key: upgrade.cattle.io/node
+  # Not declared: a Job → Plan hop filtered to the CURRENT roll via
+  # plan.upgrade.cattle.io/<name>=<status.latestHash>. The key is verified,
+  # but its name embeds the plan name so it cannot be written as a static
+  # key here — and filtering it out would hide exactly the Jobs left over
+  # from the previous, possibly failed, version, which is what you came to
+  # look at.

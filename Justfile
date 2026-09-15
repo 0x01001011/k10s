@@ -86,7 +86,7 @@ bench:
 
 # Perf guards only: startup latency, per-frame cost, clean stderr.
 test-perf:
-    go test ./internal/k8s/ -run 'TestRowCount|TestNewStoreReturnsFast|TestSilenceLogging' -v
+    go test ./internal/k8s/ -run 'TestRowCount|TestLensRowCount|TestNewStoreReturnsFast|TestSilenceLogging' -v
     go test ./internal/ui/ -run 'TestKeypressLatency|TestViewDoesNotBuildRows' -v
 
 # ---- quality --------------------------------------------------------------

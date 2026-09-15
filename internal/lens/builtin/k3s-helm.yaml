@@ -1,0 +1,135 @@
+# k3s helm-controller — helm.cattle.io/v1. Verified against k3s-io/helm-controller
+# v0.17.8; that group has only ever served v1 (one dir under
+# pkg/apis/helm.cattle.io). rancher/helm-controller is the image name, the
+# canonical module is github.com/k3s-io/helm-controller.
+#
+# Two CRDs exist and both are declared. Their columns are lifted from the
+# controller's own +kubebuilder:printcolumn markers (types.go:42-48), so they
+# are the fields k3s itself considers populated in practice.
+#
+# READ THIS BEFORE ADDING A STATUS COLUMN. HelmChartStatus has exactly two
+# fields: jobName and conditions (types.go:154-166). There is no `failed`, no
+# `jobCreated`, no observedGeneration, no revision and no releaseName — those
+# are only condition ENTRIES, which is why FAILED below is a filter path and
+# not `.status.failed`. HelmChartCondition has no lastTransitionTime either
+# (types.go:218-229), so a "last sync"/"condition age" column is unrenderable
+# and is deliberately absent.
+#
+# HelmChartConfig has NO status and no status subresource at all — the struct
+# is TypeMeta + ObjectMeta + Spec (types.go:168-180). Any `.status.*` column on
+# it renders empty on every row forever.
+#
+# The deployed Helm release revision is not on either CR; it lives in the Helm
+# release Secret. VERSION below is `.spec.version`, the REQUESTED version, and
+# the controller ignores it outright when `.spec.chartContent` or a URL-style
+# `.spec.chart` is used (types.go:71-73) — never read it as "deployed".
+#
+# `.spec.helmVersion` is marked DEPRECATED upstream and empty on essentially
+# every real object; `.spec.valuesContent` is an arbitrarily long multi-line
+# YAML blob that would wreck the table. Both are detail-view material.
+name: k3s-helm
+requires:
+  - helm.cattle.io/v1
+
+severities:
+  # Only two condition types exist, JobCreated and Failed (types.go:213-216),
+  # and the two controller paths that set Failed=True (chart.go:325-403) set
+  # JobCreated=False in the same write — so Failed alone carries the whole
+  # signal and a second graded column would double-count it. Status is a
+  # corev1.ConditionStatus, so True/False/Unknown is the entire domain; an
+  # absent condition (never reconciled) is an empty cell, which lensRows skips
+  # rather than grades.
+  chart-failed:
+    ok: ["False"]
+    error: ["True"]
+    default: unknown
+
+kinds:
+  - key: k3s-helm-charts
+    name: HelmCharts
+    short: hc
+    group: k3s Helm
+    gvr: helm.cattle.io/v1/helmcharts
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CHART, path: .spec.chart}
+      # Rancher chart versions differ only in the +upNN suffix
+      # (103.1.1+up45.31.1), so this column is worthless truncated — which is
+      # why REPO and JOB below are not columns.
+      - {header: VERSION, path: .spec.version}
+      # No REPO column: .spec.repo is a chart-repo URL and renders as the same
+      # `https://…` on every row at the reference width.
+      #
+      # Where the release actually lands, which is routinely NOT the
+      # HelmChart's own namespace: k3s ships its packaged charts in kube-system
+      # and targets elsewhere.
+      - {header: TARGET NS, path: .spec.targetNamespace}
+      - {header: FAILED, path: '.status.conditions[?(@.type=="Failed")].status', severity: chart-failed}
+      # No JOB column either. .status.jobName is deterministically
+      # helm-install-<name> (or helm-delete-<name> once a DeletionTimestamp is
+      # set, chart.go:1610-1616), so a truncated cell carries one bit the row
+      # already implies — and `R` walks to the Job by that exact name through
+      # the field edge below, which is how you were going to reach it anyway.
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    # No delete. Deleting a HelmChart runs a helm-delete Job that uninstalls
+    # the release, and for k3s's own packaged charts the manifest controller
+    # recreates the CR from /var/lib/rancher/k3s/server/manifests straight
+    # afterwards — so the destructive half happens and the visible half is
+    # silently reverted. Not a one-keypress action.
+    actions: [describe, yaml, edit]
+
+  - key: k3s-helm-configs
+    name: HelmChartConfigs
+    short: hcc
+    group: k3s Helm
+    gvr: helm.cattle.io/v1/helmchartconfigs
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # Both have kubebuilder enums; failurePolicy defaults to reinstall
+      # (types.go:13-20, 198-199), so the apiserver populates it on every
+      # object. No severity column here and none possible — see the header.
+      - {header: FAILURE POLICY, path: .spec.failurePolicy}
+      - {header: SERVER SIDE, path: .spec.serverSide}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit]
+
+edges:
+  # The headline hop: HelmChart straight to the Job whose logs say why the
+  # install failed. Exact, because .status.jobName is the controller's own
+  # record of the Job it created (types.go:155-157), not a name we rebuild.
+  - from: helm.cattle.io/v1/helmcharts
+    to: batch/v1/jobs
+    via: field
+    key: .status.jobName
+
+  # And on to the Job's pod, which is where the helm output actually is. The
+  # label is set on both the Job ObjectMeta and the pod template with value =
+  # chart.Name (chart.go:61, 858-873), in the HelmChart's own namespace
+  # (chart.go:861). The Job side of this label is deliberately NOT declared as
+  # a second edge: it would resolve the same Jobs the field edge above already
+  # returns, under a different Rel, and list every Job twice.
+  - from: v1/pods
+    to: helm.cattle.io/v1/helmcharts
+    via: label
+    key: helmcharts.helm.cattle.io/chart
+
+  # HelmChartConfig binds to a HelmChart by SAME NAME + SAME NAMESPACE and by
+  # nothing else — resolveHelmChartFromHelmChartConfig, chart.go:239-245: "See
+  # if there is a HelmChart with the same name/namespace as this
+  # HelmChartConfig." There is no ownerRef and no selector, so the chart's own
+  # name is the join key.
+  #
+  # This edge is therefore WIDER than the binding it describes: `via: field`
+  # carries the name and nothing else, and Related deliberately keeps
+  # cross-namespace matches for every non-ownerRef edge (lensedges.go). Two
+  # HelmCharts named `traefik` in different namespaces both list the one
+  # HelmChartConfig, and only one of them is actually configured by it — check
+  # the namespace in the related row before editing what it points at. The
+  # alternative, no edge, hides the object that explains why a chart's values
+  # are not what the chart says they are.
+  - from: helm.cattle.io/v1/helmchartconfigs
+    to: helm.cattle.io/v1/helmcharts
+    via: field
+    key: .metadata.name
