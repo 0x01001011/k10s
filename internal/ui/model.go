@@ -2852,7 +2852,7 @@ func (m *Model) mark(id, s string) string {
 
 // modalOpen reports whether anything is overlaid on the main frame. While one
 // is, background zones are not marked so an overlay can never slice a
-// bubblezone marker in half.
+// zone marker in half.
 func (m *Model) modalOpen() bool {
 	return m.confirm != nil || m.setOpen || m.themeOpen || m.palOpen
 }

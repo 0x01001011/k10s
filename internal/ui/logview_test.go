@@ -451,7 +451,7 @@ func themeFor(t *testing.T) theme.Theme {
 }
 
 // stripANSI removes CSI sequences: both SGR colour codes (…m) and
-// bubblezone's own markers (…z). Scanning only for 'm' would run past a
+// our own zone markers (…z). Scanning only for 'm' would run past a
 // zone marker and swallow real text up to the next literal "m".
 func stripANSI(s string) string {
 	var b strings.Builder

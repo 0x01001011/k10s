@@ -13,7 +13,7 @@ import (
 
 // Block is a fixed-size rectangle of terminal cells. Every line is padded to
 // exactly W visible cells, so blocks can be joined without re-measuring
-// (important: measuring breaks once bubblezone markers are embedded).
+// (important: measuring breaks once zone markers are embedded).
 type Block struct {
 	W, H  int
 	Lines []string
@@ -246,7 +246,7 @@ func Panel(th theme.Theme, o PanelOpts, body []string) Block {
 		rightPlain = " " + o.TagPlain + " "
 	}
 	// A tag with no room at all is dropped rather than cut: o.Tag carries
-	// bubblezone markers, so truncating it would corrupt its click target.
+	// zone markers, so truncating it would corrupt its click target.
 	if lipgloss.Width(rightPlain) > inner-3 {
 		rightPlain = ""
 	}
