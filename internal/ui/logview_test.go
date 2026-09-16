@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/0x01001011/k10s/internal/domain"
 	"github.com/0x01001011/k10s/internal/mock"
 	"github.com/0x01001011/k10s/internal/theme"
@@ -572,5 +574,128 @@ func TestToastOnlyActionsAlsoShowLoading(t *testing.T) {
 	}
 	if !m.busy {
 		t.Error("an action whose result is only a toast should still show loading")
+	}
+}
+
+// ---- filtering -----------------------------------------------------------
+
+// press sends one key through the real key handler and resolves whatever it
+// returns, so a test exercises the same path a keystroke does.
+func press(m *Model, k string) {
+	drainCmd(m, func() tea.Cmd { _, cmd := m.Update(key(k)); return cmd }())
+}
+
+func TestLogFilterNarrowsToMatchingLines(t *testing.T) {
+	m := newTestModel(t, mock.New(""))
+	dismissOnboarding(m)
+	openLogs(t, m)
+
+	total := len(m.logShown)
+	if total != len(m.textLines) {
+		t.Fatalf("an unfiltered log shows %d of %d lines", total, len(m.textLines))
+	}
+
+	press(m, "f")
+	if m.focus != focusMainSearch {
+		t.Fatal("f should open the filter box in the log viewer")
+	}
+	for _, r := range "healthz" {
+		press(m, string(r))
+	}
+	if m.logFilter != "healthz" {
+		t.Fatalf("filter = %q, want it to collect what was typed", m.logFilter)
+	}
+	if len(m.logShown) == 0 || len(m.logShown) >= total {
+		t.Fatalf("%d line(s) shown of %d, want a strict subset", len(m.logShown), total)
+	}
+	for _, ln := range m.logShown {
+		if !strings.Contains(strings.ToLower(ln), "healthz") {
+			t.Errorf("filtered view still shows %q", ln)
+		}
+	}
+	// Nothing is thrown away: the raw lines are all still loaded.
+	if len(m.textLines) != total {
+		t.Errorf("filtering dropped raw lines: %d, want %d", len(m.textLines), total)
+	}
+
+	press(m, "esc")
+	if m.logFilter != "" || len(m.logShown) != total {
+		t.Errorf("esc should clear the filter, got %q with %d shown", m.logFilter, len(m.logShown))
+	}
+}
+
+func TestLogLevelFloorCycles(t *testing.T) {
+	m := newTestModel(t, mock.New(""))
+	dismissOnboarding(m)
+	openLogs(t, m)
+
+	all := len(m.logShown)
+	for _, want := range []logLevel{lvlInfo, lvlWarn, lvlErr, lvlNone} {
+		press(m, "w")
+		if m.logMin != want {
+			t.Fatalf("level floor = %v, want %v", m.logMin, want)
+		}
+	}
+	if len(m.logShown) != all {
+		t.Errorf("a full cycle should end back at %d lines, got %d", all, len(m.logShown))
+	}
+
+	press(m, "w") // INFO and above
+	press(m, "w") // WARN and above
+	for _, ln := range m.logShown {
+		if strings.Contains(ln, "INFO") {
+			t.Errorf("WARN floor still shows %q", ln)
+		}
+	}
+	if len(m.logShown) == 0 {
+		t.Error("the demo log has warnings; the WARN floor should keep them")
+	}
+}
+
+func TestLogRawToggleRestoresTheOriginalLine(t *testing.T) {
+	m := newTestModel(t, mock.New(""))
+	dismissOnboarding(m)
+	openLogs(t, m)
+
+	parsed := strings.Join(m.logShown, "\n")
+	if !strings.Contains(parsed, logSep) {
+		t.Fatal("the demo log has JSON records; expected at least one parsed line")
+	}
+
+	press(m, "t")
+	if !m.logRaw {
+		t.Fatal("t should switch to raw lines")
+	}
+	if got := strings.Join(m.logShown, "\n"); got != strings.Join(m.textLines, "\n") {
+		t.Error("raw mode should show the lines exactly as received")
+	}
+
+	press(m, "t")
+	if m.logRaw || strings.Join(m.logShown, "\n") != parsed {
+		t.Error("t again should go back to parsed lines")
+	}
+}
+
+// A hidden line must not move a paused view: the offset counts rows on
+// screen, and a filtered-out line never reaches the screen.
+func TestFilteredStreamLineDoesNotScrollAPausedView(t *testing.T) {
+	m := newTestModel(t, mock.New(""))
+	dismissOnboarding(m)
+	openLogs(t, m)
+
+	m.setLogFilter("healthz")
+	m.logScrollBy(3)
+	if m.logFollow {
+		t.Fatal("scrolling up should pause following")
+	}
+	at := m.logScroll
+
+	m.Update(logLineMsg{gen: m.logGen, ok: true, line: "2026-08-25T08:13:00.000Z INFO worker flushed batch size=1"})
+	if m.logScroll != at {
+		t.Errorf("a hidden line moved the view: %d, want %d", m.logScroll, at)
+	}
+	m.Update(logLineMsg{gen: m.logGen, ok: true, line: "2026-08-25T08:13:01.000Z INFO http GET /healthz 200 0.3ms"})
+	if m.logScroll <= at {
+		t.Errorf("a visible line should push a paused view: %d, want > %d", m.logScroll, at)
 	}
 }

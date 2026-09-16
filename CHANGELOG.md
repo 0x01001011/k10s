@@ -13,7 +13,12 @@ Cutting one is four steps, in order — see
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Log viewer parses structured lines: JSON and logfmt records render as
+  `time LEVEL message │ k=v`, with the duplicate record timestamp dropped.
+- `f` filters log lines live (`-term` excludes), `w` cycles the level floor
+  (all → INFO → WARN → ERROR), `t` shows the raw lines again.
 
 ## [v0.5.0] — 2026-09-16
 

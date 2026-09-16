@@ -591,11 +591,25 @@ func (m *Model) viewMain(w, h int) Block {
 	if m.mode == modeText || m.mode == modeLogs {
 		closeTag := m.mark("close", brk.Render("[ ")+lipgloss.NewStyle().Background(th.Bg).Foreground(th.Err).Render("close")+brk.Render(" ]"))
 		body := m.textBody(inner, h-2)
+		title := m.textTitle
 		if m.mode == modeLogs {
-			body = m.logBody(inner, h-2)
+			// Like the table, the filter box only costs rows while it is in
+			// use — a log viewer wants every row it can get.
+			bodyH := h - 2
+			searching := m.focus == focusMainSearch || m.logFilter != ""
+			if searching {
+				bodyH -= 2
+			}
+			body = m.logBody(inner, maxi(1, bodyH))
+			if searching {
+				body = append(body,
+					lipgloss.NewStyle().Background(th.Bg).Foreground(th.Border).Render(strings.Repeat("╌", inner)),
+					m.logSearchBox(inner))
+				title += " · find: " + m.logFilter
+			}
 		}
 		return Panel(th, PanelOpts{
-			Title: m.textTitle, Tag: closeTag + brk.Render(" ") + zoomTag,
+			Title: title, Tag: closeTag + brk.Render(" ") + zoomTag,
 			TagPlain: "[ close ] " + zoomPlain, Focused: focused, W: w, H: h,
 		}, body)
 	}

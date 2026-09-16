@@ -96,6 +96,8 @@ func logsTpl(name string) string {
 2026-08-25T08:12:33.881Z WARN  gc            pause=18ms heap=412Mi
 2026-08-25T08:12:40.117Z INFO  http          GET  /v1/orders/88213     200 7.4ms trace=e21f8b05
 2026-08-25T08:12:44.590Z INFO  metrics       scrape ok series=1842
+{"level":"info","ts":"2026-08-25T08:12:46.111Z","logger":"controller","msg":"reconciling","controllerKind":"Deployment","name":"` + name + `","namespace":"default","reconcileID":"40bf13d5-971f-47bf-ba37"}
+{"level":"error","ts":"2026-08-25T08:12:47.900Z","logger":"controller","msg":"reconcile failed","error":"connection refused","namespace":"default","retries":3}
 2026-08-25T08:12:51.008Z INFO  http          GET  /healthz             200 0.3ms`
 }
 
