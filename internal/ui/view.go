@@ -1268,6 +1268,27 @@ func (m *Model) overlaySuggestions(root Block, l layout, sug []SlashCommand) Blo
 	return root.Overlay(box, 1, y)
 }
 
+// confirmBodyLines flattens a modal message into one string per rendered row.
+//
+// The box reserves len(body)+2 rows and truncates each element to the inner
+// width, so an element carrying its own newlines paints rows the box never
+// reserved and that no truncation ever bounded — the manifest of a create
+// action escaping the border and overwriting the panes behind it. Splitting
+// here rather than at each call site is deliberate: every confirm modal in the
+// app renders through overlayConfirm, and a caller that forgets is a caller
+// that reintroduces the bug.
+func confirmBodyLines(message []string) []string {
+	out := make([]string, 0, len(message))
+	for _, ln := range message {
+		if !strings.Contains(ln, "\n") {
+			out = append(out, ln)
+			continue
+		}
+		out = append(out, strings.Split(ln, "\n")...)
+	}
+	return out
+}
+
 func (m *Model) overlayConfirm(root Block) Block {
 	th := m.th()
 	c := m.confirm
@@ -1282,7 +1303,7 @@ func (m *Model) overlayConfirm(root Block) Block {
 	inner := w - 2
 
 	body := []string{""}
-	for _, ln := range c.message {
+	for _, ln := range confirmBodyLines(c.message) {
 		body = append(body, paint(th.Bg, th.Fg, false, "  "+trunc(ln, inner-3)))
 	}
 	body = append(body, "")

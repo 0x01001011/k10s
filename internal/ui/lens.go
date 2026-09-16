@@ -184,8 +184,10 @@ func (m *Model) fireLensAction(sp domain.LensActionSpec) tea.Cmd {
 // equivalent kubectl line. Showing the command is not decoration: it is how
 // an operator checks that the button does what they think, and how they
 // reproduce it in a runbook afterwards.
+// The label is NOT repeated here: overlayConfirm already renders it as the
+// modal's title, and a 58-column box cannot spare a row to say it twice.
 func lensConfirmBody(sp domain.LensActionSpec, short, ns, name string) []string {
-	body := []string{sp.Label, short + "/" + name}
+	body := []string{short + "/" + name}
 	if ns != "" {
 		body = append(body, "namespace: "+ns)
 	}
