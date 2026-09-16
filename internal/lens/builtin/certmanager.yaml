@@ -1,0 +1,150 @@
+# cert-manager — cert-manager.io/v1 only.
+#
+# v1 is the single served+storage version of all four CRDs
+# (deploy/crds/cert-manager.io_*.yaml, versions[0]: name v1, served true,
+# storage true; pkg/apis/certmanager/v1/register.go pins SchemeGroupVersion
+# to {cert-manager.io, v1}). The alpha/beta versions were removed in 1.6, so
+# requiring anything else would hide the pack on every supported install.
+#
+# Four of cert-manager's CRDs are declared. The ACME group
+# (acme.cert-manager.io/v1: Order, Challenge) is NOT here — it is a second
+# group/version, and `requires` is ALL-or-nothing per pack, so listing it
+# would hide certificates on clusters running cert-manager without the ACME
+# controller. It belongs in its own pack once acme/v1/types_challenge.go is
+# verified.
+#
+# Scope, straight from the CRDs: certificates, certificaterequests and
+# issuers are Namespaced; clusterissuers is scope: Cluster.
+#
+# Deliberately NOT shipped, so nobody re-adds them:
+#
+#   * Renew / approve / deny actions. `cmctl renew` does not write a spec
+#     field — it appends an Issuing condition to .status.conditions, and a
+#     status merge-patch of a conditions LIST would clobber Ready alongside
+#     it. There is no annotation key for renewal upstream (the only
+#     cert-manager.io annotation on this path is
+#     issue-temporary-certificate, which is not a renewal). No verified
+#     declarative write ⇒ no action.
+#   * Certificate ISSUING column (.status.conditions[?(@.type=="Issuing")]
+#     .status). The condition exists (CertificateConditionIssuing), but it is
+#     transient: it is absent, hence an empty cell, on every certificate that
+#     is not mid-issuance. A column blank on 99% of rows reads as a bug.
+#   * Certificate KIND column (.spec.issuerRef.kind). The field exists, but
+#     an empty value MEANS "Issuer" (IssuerReference.Kind is omitempty with a
+#     defaulted meaning) and Column has no default: the column would be blank
+#     for every namespaced-issuer certificate and look broken.
+#   * Certificate .status.lastFailureTime. Exists, but is effectively
+#     superseded by failedIssuanceAttempts and the CertificateRequest's own
+#     failureTime; it is unset on virtually every row.
+#   * Certificate DNS column (.spec.dnsNames[*]). jsonpath space-joins the
+#     matches into one cell and the list is unbounded — a SAN-heavy
+#     certificate would eat the row at the 140-col reference width.
+#   * Issuer/ClusterIssuer conditions other than Ready. IssuerConditionReady
+#     is the only IssuerConditionType constant declared upstream
+#     (pkg/apis/certmanager/v1/types_issuer.go); any other type name matches
+#     nothing, forever.
+#   * A CertificateRequest -> Certificate parent edge. The ownership is an
+#     ownerReferences convention, not a typed field, and was not verified at
+#     source — so it does not ship.
+name: cert-manager
+requires:
+  - cert-manager.io/v1
+
+severities:
+  # Condition status values are exactly True/False/Unknown
+  # (pkg/apis/meta/v1/types.go). A Certificate with Ready=False is not
+  # serving usable TLS, so it outranks everything else in the table.
+  cert-ready:
+    ok: ["True"]
+    error: ["False"]
+    default: unknown
+  # Same field, softer grading: a CertificateRequest is Ready=False for the
+  # whole normal in-flight window between creation and issuance. Grading that
+  # as an error would float every healthy pending request above genuinely
+  # broken certificates.
+  req-ready:
+    ok: ["True"]
+    warn: ["False"]
+    default: unknown
+
+kinds:
+  - key: certmgr-certificates
+    name: Certificates
+    short: cert
+    group: cert-manager
+    gvr: cert-manager.io/v1/certificates
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: READY, path: '.status.conditions[?(@.type=="Ready")].status', severity: cert-ready}
+      # The headline. .status.notAfter is a FUTURE RFC3339 instant, so it
+      # needs `until`, not `age`: ShortHumanDuration returns the literal
+      # "<invalid>" for a negative duration, which is what `age` would print
+      # on every healthy certificate. Past the instant, `until` falls back to
+      # an age, so an expired cert still reads sensibly.
+      - {header: EXPIRES, path: .status.notAfter, format: until}
+      - {header: RENEWAL, path: .status.renewalTime, format: until}
+      - {header: SECRET, path: .spec.secretName}
+      - {header: ISSUER, path: .spec.issuerRef.name}
+      # Ready's message is the only place the actual failure text surfaces on
+      # the Certificate itself; truncated because it is free-form prose and
+      # the row has six columns to feed before it at 140 cols.
+      - {header: MESSAGE, path: '.status.conditions[?(@.type=="Ready")].message', truncate: 44}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events]
+
+  - key: certmgr-requests
+    name: Cert Requests
+    short: certreq
+    group: cert-manager
+    gvr: cert-manager.io/v1/certificaterequests
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: READY, path: '.status.conditions[?(@.type=="Ready")].status', severity: req-ready}
+      # Why it is stuck: Ready's reason carries Pending / Failed / Denied,
+      # and it is the reason the whole kind is worth showing.
+      - {header: REASON, path: '.status.conditions[?(@.type=="Ready")].reason'}
+      - {header: ISSUER, path: .spec.issuerRef.name}
+      # .spec.username is the CRD's own "Requester" printer column.
+      - {header: REQUESTER, path: .spec.username, truncate: 28}
+      - {header: FAILED, path: .status.failureTime, format: age}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events]
+
+  - key: certmgr-issuers
+    name: Issuers
+    short: iss
+    group: cert-manager
+    gvr: cert-manager.io/v1/issuers
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: READY, path: '.status.conditions[?(@.type=="Ready")].status', severity: cert-ready}
+      - {header: MESSAGE, path: '.status.conditions[?(@.type=="Ready")].message', truncate: 60}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events]
+
+  # scope: Cluster upstream — namespaced: true here would filter every row
+  # out and the kind would list nothing at all.
+  - key: certmgr-clusterissuers
+    name: ClusterIssuers
+    short: ciss
+    group: cert-manager
+    gvr: cert-manager.io/v1/clusterissuers
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: READY, path: '.status.conditions[?(@.type=="Ready")].status', severity: cert-ready}
+      - {header: MESSAGE, path: '.status.conditions[?(@.type=="Ready")].message', truncate: 60}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, events]
+
+edges:
+  # The hop kubectl cannot make: from a Certificate to the Secret it actually
+  # writes. .spec.secretName is a required field naming a Secret in the
+  # Certificate's own namespace, which is exactly what a field edge matches
+  # (cross-namespace matches are dropped anyway).
+  - from: cert-manager.io/v1/certificates
+    to: v1/secrets
+    via: field
+    key: .spec.secretName

@@ -397,6 +397,51 @@ func TestCursorFollowsItsObjectWhenTheTableReorders(t *testing.T) {
 	if got := m.curName(); got != want {
 		t.Errorf("after a reorder the cursor is on %q, want %q — the next keystroke would act on the wrong object", got, want)
 	}
+
+	// And when the anchored object itself disappears, the cursor keeps its
+	// index and forgets the anchor, so a later row of the same name is not
+	// chased onto whatever has since taken that slot.
+	if err := m.src.Delete("argocd-apps", m.curNamespace(), want); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	idx := m.rowIdx
+	m.reanchorRow()
+	if m.rowAnchor != "" {
+		t.Errorf("rowAnchor = %q after the object vanished, want it dropped", m.rowAnchor)
+	}
+	if m.rowIdx != idx {
+		t.Errorf("rowIdx moved to %d after the object vanished, want it left at %d", m.rowIdx, idx)
+	}
+}
+
+// reanchorRow runs on every repaint tick. It used to call tableData once per
+// row — and tableData re-reads the store and copies the whole table — so a
+// tick that only moves a cursor cost O(rows²) copies. The scan must cost one
+// tableData and nothing per row.
+func TestReanchorDoesNotAllocatePerRow(t *testing.T) {
+	m := demoProd(t)
+	selectLensKind(t, m, "pods") // the widest demo table: the bound needs rows
+	cols, rows := m.tableData()
+	if len(rows) < 8 {
+		t.Fatalf("need at least 8 demo rows for the bound to bite, got %d", len(rows))
+	}
+	// Anchor the LAST row and start at the first, so every run scans the
+	// whole table rather than hitting the fast path.
+	anchor := rowIdentity(m, cols).name(rows[len(rows)-1])
+
+	base := testing.AllocsPerRun(50, func() { m.tableData() })
+	scan := testing.AllocsPerRun(50, func() {
+		m.rowAnchor, m.rowIdx = anchor, 0
+		m.reanchorRow()
+	})
+
+	// One tableData for the scan, plus slack for the bookkeeping around it.
+	// A per-row allocation would add len(rows); a per-row tableData would
+	// multiply base by it.
+	if limit := base + 4; scan > limit {
+		t.Errorf("reanchorRow allocates %.0f over %d rows, want <= %.0f (one tableData at %.0f + slack)",
+			scan, len(rows), limit, base)
+	}
 }
 
 // A disabled action that is merely refused must NOT open an input box, and

@@ -28,6 +28,10 @@ var special = map[string]tea.KeyType{
 	"pgdown": tea.KeyPgDown, "pgup": tea.KeyPgUp,
 	"ctrl+a": tea.KeyCtrlA, "backspace": tea.KeyBackspace,
 	"ctrl+s": tea.KeyCtrlS, "ctrl+p": tea.KeyCtrlP, "shift+tab": tea.KeyShiftTab,
+	// ctrl+y (export) belongs here for the same reason as the rest: a key that
+	// cannot be replayed headlessly cannot be verified against a real frame,
+	// which is how every other UI change in this repo is checked.
+	"ctrl+y": tea.KeyCtrlY,
 }
 
 func main() {

@@ -1,0 +1,200 @@
+# Gateway API — gateway.networking.k8s.io/v1, verified against the upstream
+# Go types at tag v1.6.2 (kubernetes-sigs/gateway-api, package apis/v1).
+#
+# All four kinds are served at v1 in the Standard channel: GatewayClass
+# (gatewayclass_types.go, +kubebuilder:resource:scope=Cluster), Gateway,
+# HTTPRoute and GRPCRoute (each +kubebuilder:storageversion). One `requires`
+# entry therefore covers every kind, which is what kindsServed demands.
+#
+# COMPATIBILITY FLOOR: Gateway API >= v1.1.0. GRPCRoute only graduated to v1
+# in v1.1.0 ("GRPCRoute has graduated to GA (v1) and is now part of the
+# Standard Channel", 1.1-CHANGELOG.md); on a cluster still on v1.0.x it exists
+# only at v1alpha2, discovery for `grpcroutes` at v1 fails, and — because
+# kindsServed gates all-or-nothing across the pack — Gateway API would vanish
+# entirely. v1.0.x predates GRPCRoute GA by two years; the floor is accepted
+# deliberately rather than dropping a first-class route kind.
+#
+# This is the ingress lens traefik.yaml points at: Traefik's CRDs carry no
+# .status at all, Gateway API carries the conditions that answer "which
+# listener is my route not attaching to".
+#
+# Deliberately NOT shipped, so nobody re-adds them:
+#
+#   * GatewayClass VERSION / SUPPORTED VERSION — GatewayClassStatus holds only
+#     `conditions` and `supportedFeatures` (gatewayclass_types.go). The version
+#     string lives in the SupportedVersion condition's *message*, not in any
+#     field, and Column has no message extraction. A VERSION column would be
+#     empty on every row. The condition status alone is not worth a column
+#     next to ACCEPTED, which is False whenever the class is unusable.
+#   * Gateway LISTENERS ACCEPTED / CONFLICTED — per-listener conditions are
+#     .status.listeners[*].conditions[?(@.type=="...")], a nested filter that
+#     concatenates one token per listener into a single cell with nothing
+#     tying a token back to its listener. ATTACHED below is the per-listener
+#     scalar that actually answers the question; listener conditions are a
+#     detail view (`y`/describe), not a column.
+#   * .status.addresses[0].value — upstream's own printcolumn uses [*] and a
+#     Gateway may be assigned several addresses. Matching upstream.
+#   * A route COUNT column — there is no length() and Format has no counter;
+#     see ATTACHED for what the multi-result render actually gives you.
+name: gatewayapi
+requires:
+  - gateway.networking.k8s.io/v1
+
+severities:
+  # Accepted / Programmed / ResolvedRefs are all metav1.Condition and are all
+  # True on a healthy object, so False is a genuine error rather than a
+  # routine state. An absent condition renders empty and lensRows skips it —
+  # a controller that has not reconciled yet is not graded as broken.
+  condition:
+    ok: ["True"]
+    error: ["False"]
+    warn: ["Unknown"]
+
+kinds:
+  - key: gw-classes
+    name: GatewayClasses
+    short: gc
+    group: Gateway API
+    gvr: gateway.networking.k8s.io/v1/gatewayclasses
+    # scope=Cluster upstream; namespaced:true here would filter every row away.
+    namespaced: false
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # GatewayClassSpec.ControllerName — upstream's own printcolumn.
+      - {header: CONTROLLER, path: .spec.controllerName}
+      # GatewayClassConditionStatusAccepted = "Accepted"; upstream printcolumn
+      # is this exact filter.
+      - {header: ACCEPTED, path: '.status.conditions[?(@.type=="Accepted")].status', severity: condition}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: gw-gateways
+    name: Gateways
+    short: gtw
+    group: Gateway API
+    gvr: gateway.networking.k8s.io/v1/gateways
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # GatewaySpec.GatewayClassName — upstream printcolumn "Class".
+      - {header: CLASS, path: .spec.gatewayClassName}
+      # GatewayStatus.Addresses[].Value, [*] like upstream's printcolumn: a
+      # Gateway can carry several (one IP, one hostname), space-joined.
+      - {header: ADDRESS, path: ".status.addresses[*].value", truncate: 28}
+      # Listener.Port under GatewaySpec.Listeners. Multi-result: "80 443".
+      # format: int because an integral JSON number that ever decodes as a
+      # float64 renders "8e+01"; a space-joined render is passed through
+      # unchanged by parseLensNumber, so the format is free here.
+      - {header: PORTS, path: ".spec.listeners[*].port", format: int}
+      # LISTENERS and ATTACHED are both read from .status.listeners, so their
+      # tokens line up with each other. PORTS above comes from .spec, and
+      # GatewayStatus.Listeners is declared +listType=map with listMapKey=name
+      # — keyed by name, with NO ordering guarantee relative to the spec. So
+      # "443 80" against "0 3" must NOT be read positionally; pair ATTACHED
+      # with LISTENERS, which is the pairing upstream actually guarantees.
+      - {header: LISTENERS, path: ".status.listeners[*].name", truncate: 28}
+      # ListenerStatus.AttachedRoutes, one per listener, SPACE-JOINED in ONE
+      # cell: "1 0" means the first listener named in LISTENERS has one route
+      # attached and the second has none — it is NOT a single number and NOT a
+      # total. There is no sum to be had (no arithmetic in JSONPath, no
+      # counter in Format), and inventing one would hide exactly the failure
+      # this column exists to show.
+      - {header: ATTACHED, path: ".status.listeners[*].attachedRoutes", format: int}
+      # GatewayConditionProgrammed = "Programmed" — the daily question: the
+      # Gateway was accepted but the data plane never came up.
+      - {header: PROGRAMMED, path: '.status.conditions[?(@.type=="Programmed")].status', severity: condition}
+      # GatewayConditionAccepted = "Accepted". Graded too, because worst
+      # severity across all columns wins: a Gateway rejected by its class must
+      # not sort as healthy just because Programmed is absent.
+      - {header: ACCEPTED, path: '.status.conditions[?(@.type=="Accepted")].status', severity: condition}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: gw-httproutes
+    name: HTTPRoutes
+    short: httproute
+    group: Gateway API
+    gvr: gateway.networking.k8s.io/v1/httproutes
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # HTTPRouteSpec.Hostnames, up to 16 upstream — truncated rather than
+      # given the width it would ask for at the 140-col reference frame,
+      # where NAME plus four more columns have to fit beside it.
+      - {header: HOSTNAMES, path: ".spec.hostnames[*]", truncate: 32}
+      # CommonRouteSpec.ParentRefs[].Name — what the route ASKED to attach to.
+      # The status side (.status.parents[*].parentRef.name) is the same names
+      # echoed back and is not worth a second column; the two conditions below
+      # are what differs between asked and got.
+      - {header: PARENTS, path: ".spec.parentRefs[*].name", truncate: 28}
+      # RouteConditionAccepted / RouteConditionResolvedRefs (shared_types.go),
+      # one token per parent, in parentRefs order. Accepted False = the
+      # Gateway refused the attachment; ResolvedRefs False = a backendRef does
+      # not exist. Both False are the two everyday route failures.
+      #
+      # NEITHER column is graded, and that is deliberate. A route with two
+      # parentRefs — one Gateway per listener, or internal + external, the
+      # standard Gateway API pattern — renders "True False", which matches no
+      # entry in the `condition` table and falls through to unknown. Unknown
+      # outranks ok, so a perfectly healthy two-parent route would be marked
+      # "?" and sorted ABOVE every healthy single-parent route, while the
+      # genuinely broken multi-parent route it was meant to catch grades the
+      # same. A severity table matches whole cell values; a space-joined cell
+      # is not a value. Read the tokens against PARENTS, same order.
+      - {header: ACCEPTED, path: '.status.parents[*].conditions[?(@.type=="Accepted")].status'}
+      - {header: RESOLVEDREFS, path: '.status.parents[*].conditions[?(@.type=="ResolvedRefs")].status'}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: gw-grpcroutes
+    name: GRPCRoutes
+    short: grpcroute
+    group: Gateway API
+    gvr: gateway.networking.k8s.io/v1/grpcroutes
+    namespaced: true
+    # Identical shape to HTTPRoute: GRPCRouteSpec embeds the same
+    # CommonRouteSpec and carries the same Hostnames field, and the route
+    # status is the same RouteStatus. See the v1.1.0 floor at the top.
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: HOSTNAMES, path: ".spec.hostnames[*]", truncate: 32}
+      - {header: PARENTS, path: ".spec.parentRefs[*].name", truncate: 28}
+      #
+      # NEITHER column is graded, and that is deliberate. A route with two
+      # parentRefs — one Gateway per listener, or internal + external, the
+      # standard Gateway API pattern — renders "True False", which matches no
+      # entry in the `condition` table and falls through to unknown. Unknown
+      # outranks ok, so a perfectly healthy two-parent route would be marked
+      # "?" and sorted ABOVE every healthy single-parent route, while the
+      # genuinely broken multi-parent route it was meant to catch grades the
+      # same. A severity table matches whole cell values; a space-joined cell
+      # is not a value. Read the tokens against PARENTS, same order.
+      - {header: ACCEPTED, path: '.status.parents[*].conditions[?(@.type=="Accepted")].status'}
+      - {header: RESOLVEDREFS, path: '.status.parents[*].conditions[?(@.type=="ResolvedRefs")].status'}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+# Read-only pack: Gateway API has no imperative operation to wrap — no
+# resync, no pause, no promote — so there is no custom action to declare and
+# nothing was dropped here.
+edges:
+  # ParentReference carries an optional .namespace, and a route may attach to
+  # a Gateway in another namespace. via: field matches on the NAME alone, so
+  # the namespace qualifier is not expressible; lensedges keeps each match
+  # with the namespace it was actually found in, so a cross-namespace parent
+  # still resolves, and two same-named Gateways in different namespaces both
+  # show rather than one being silently attributed to the other.
+  - from: gateway.networking.k8s.io/v1/httproutes
+    to: gateway.networking.k8s.io/v1/gateways
+    via: field
+    key: .spec.parentRefs[*].name
+  - from: gateway.networking.k8s.io/v1/grpcroutes
+    to: gateway.networking.k8s.io/v1/gateways
+    via: field
+    key: .spec.parentRefs[*].name
+  # GatewayClass is cluster-scoped, which sameNamespace treats as matching any
+  # view, so this resolves from a Gateway in any namespace.
+  - from: gateway.networking.k8s.io/v1/gateways
+    to: gateway.networking.k8s.io/v1/gatewayclasses
+    via: field
+    key: .spec.gatewayClassName

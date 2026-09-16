@@ -298,6 +298,12 @@ func Help() string {
                         built-in keys win unless override: true
 
   COPY / SELECT
+    ctrl+y              export the current view — the table, plus the selected
+                        object's YAML and describe — to one file, and toast the
+                        absolute path (under ~/.k10s/exports). Secret data,
+                        last-applied-configuration and credential-like fields
+                        are redacted. No clipboard: a path is what a ticket
+                        wants, and it works over SSH.
     ctrl+s              toggle mouse capture (or /mouse). With it OFF the
                         terminal does its own selection, so you can
                         drag-select and copy; clicking rows/buttons resumes

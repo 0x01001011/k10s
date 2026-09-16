@@ -548,6 +548,77 @@ apps/v1 deployments/statefulsets/daemonsets (a VMAgent runs as any of the
 three). OwnerRef edges were tried first and dropped as unverifiable. That label
 is generic enough to over-match on a busy namespace; the YAML says so.
 
+### cert-manager
+
+`cert-manager.io/v1`, four kinds: `certificates`, `certificaterequests`,
+`issuers`, `clusterissuers` (the last cluster-scoped). The reason the pack
+exists is EXPIRES — `.status.notAfter` under `format: until` — which no
+terminal tool answers today without a `-o jsonpath` loop per certificate.
+
+`format: until` exists for this column. `format: age` renders
+`ShortHumanDuration(time.Since(t))`, and for a future instant that is negative,
+which apimachinery prints as the literal `<invalid>` — so the best column in
+the release would have read `<invalid>` on every *healthy* certificate. Past
+instants fall back to an age with a leading `-`, because `3d` and `3d` are not
+different enough to tell "expires in three days" from "expired three days ago".
+
+Two severity tables, not one. Certificates and Issuers grade Ready=False as
+**error**; CertificateRequests grade it **warn**, because Ready=False is the
+normal in-flight state of a pending request and error-grading it would float
+healthy requests above genuinely broken certificates in the worst-first sort.
+
+No renew action: `cmctl renew` appends an Issuing condition to
+`.status.conditions`, and a merge patch of a conditions *list* would clobber
+Ready. There is no declarative write to wrap, so there is no button.
+
+### flux
+
+Three group/versions — `kustomize.toolkit.fluxcd.io/v1`,
+`source.toolkit.fluxcd.io/v1`, `helm.toolkit.fluxcd.io/v2` — and four kinds:
+Kustomizations, GitRepositories, HelmRepositories, HelmReleases. Reconcile,
+suspend and resume without the `flux` binary on the box you happen to be on.
+
+Reconcile is the annotation `reconcile.fluxcd.io/requestedAt` with an ack on
+`.status.lastHandledReconcileAt`: a single-key annotate, so `ackWant` returns
+the token and the ack is a real value match rather than a presence check. Force
+and reset (HelmRelease only) write two annotations sharing one `{{.Now}}` token,
+which is what `ShouldHandleForceRequest` requires — and they ship *without* an
+ack, because `ackWant` returns `""` for a multi-key annotate and the presence
+fallback would report success before the controller had done anything.
+
+**OCIRepositories are deliberately absent**, and the reason is the gate rather
+than the CRD. `OCIRepository` reached `source.toolkit.fluxcd.io/v1` only in
+Flux v2.6. On a 2.4/2.5 cluster `requires` would still pass — that group/version
+is served, by GitRepository and HelmRepository — and then the resource check
+would find no `ocirepositories` and drop **the whole pack**, hiding four working
+kinds with no message, indistinguishable from "Flux is not installed".
+
+HelmRepositories have no reconcile for a related reason: since v2.2 an OCI-type
+HelmRepository is not reconciled at all, so the annotation would be written and
+then acked against a field no controller will ever set — a spinner running the
+full 45-second timeout on an object that was never going to answer.
+
+### gatewayapi
+
+`gateway.networking.k8s.io/v1`: GatewayClasses, Gateways, HTTPRoutes,
+GRPCRoutes. The daily question is which listener a route failed to attach to.
+
+`ATTACHED` is `.status.listeners[*].attachedRoutes`, space-joined across
+listeners — `1 0` means the second listener has nothing attached. It is not a
+total, and there is no sum to be had: JSONPath has no arithmetic. It is paired
+with `LISTENERS` (`.status.listeners[*].name`) rather than with `PORTS`, because
+`GatewayStatus.Listeners` is a `+listType=map` keyed by name with no ordering
+guarantee relative to `.spec` — reading status tokens positionally against spec
+tokens is an assumption upstream never makes.
+
+The route condition columns are **not graded**, unlike the Gateway ones. A route
+with two `parentRefs` — one Gateway per listener, or internal plus external, the
+standard pattern — renders `True False`, which matches no entry in a severity
+table and falls through to *unknown*; unknown outranks ok, so a healthy
+two-parent route would be marked "?" and sorted above every healthy single-parent
+one. A severity table matches whole cell values, and a space-joined cell is not
+a value.
+
 ## Dependencies
 
 Zero new Go modules. Every lens uses the `dynamic` client and

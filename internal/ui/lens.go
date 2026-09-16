@@ -446,15 +446,21 @@ func (m *Model) reanchorRow() {
 	if m.rowAnchor == "" || m.mode != modeTable {
 		return
 	}
-	_, rows := m.tableData()
+	cols, rows := m.tableData()
 	if len(rows) == 0 {
 		return
 	}
-	if m.rowIdx >= 0 && m.rowIdx < len(rows) && rowName(m, rows[m.rowIdx]) == m.rowAnchor {
+	// Resolving the identity columns is per-TABLE work, and so is tableData
+	// itself — it re-reads the store and copies every row. Doing either
+	// inside the scan made a tick that only moves a cursor cost O(rows²)
+	// copies of the whole table.
+	id := rowIdentity(m, cols)
+	wantNS, wantName, _ := strings.Cut(m.rowAnchor, "/")
+	if m.rowIdx >= 0 && m.rowIdx < len(rows) && id.is(rows[m.rowIdx], wantNS, wantName) {
 		return
 	}
 	for i, r := range rows {
-		if rowName(m, r) == m.rowAnchor {
+		if id.is(r, wantNS, wantName) {
 			m.rowIdx = i
 			m.rowMem[m.curKind().Key] = i
 			return
@@ -472,34 +478,62 @@ func (m *Model) anchorRow() {
 	if m.mode != modeTable {
 		return
 	}
-	m.rowAnchor = rowName(m, m.curRow())
+	cols, rows := m.tableData()
+	if m.rowIdx < 0 || m.rowIdx >= len(rows) || len(rows[m.rowIdx]) == 0 {
+		m.rowAnchor = ""
+		return
+	}
+	m.rowAnchor = rowIdentity(m, cols).name(rows[m.rowIdx])
 }
 
-// rowName reads a row's identity cell, by header rather than index: under
-// :ns all a NAMESPACE column shifts everything right.
-func rowName(m *Model, row []string) string {
-	if len(row) == 0 {
-		return ""
-	}
+// rowIdent is where a row's namespace and name live, resolved by header
+// rather than by index: under :ns all a NAMESPACE column shifts everything
+// right. nsIdx is -1 when the table has no namespace column, and nameIdx
+// falls back to column 0 when the header is missing — same as before.
+type rowIdent struct{ nameIdx, nsIdx int }
+
+// rowIdentity resolves those columns once for the table on screen.
+func rowIdentity(m *Model, cols []string) rowIdent {
 	key := "NAME"
 	if m.curKind().Key == "events" {
 		key = "OBJECT"
 	}
-	cols, _ := m.tableData()
-	ns := ""
-	name := row[0]
+	id := rowIdent{nameIdx: 0, nsIdx: -1}
 	for i, c := range cols {
-		if i >= len(row) {
-			break
-		}
 		switch c {
 		case key:
-			name = row[i]
+			id.nameIdx = i
 		case "NAMESPACE":
-			ns = row[i]
+			id.nsIdx = i
 		}
 	}
+	return id
+}
+
+func (id rowIdent) cells(row []string) (ns, name string) {
+	name = row[0]
+	if id.nameIdx < len(row) {
+		name = row[id.nameIdx]
+	}
+	if id.nsIdx >= 0 && id.nsIdx < len(row) {
+		ns = row[id.nsIdx]
+	}
+	return ns, name
+}
+
+// name is the stored anchor form. Built once per anchoring, never inside the
+// scan — the scan compares the halves instead, so it allocates nothing.
+func (id rowIdent) name(row []string) string {
+	ns, name := id.cells(row)
 	return ns + "/" + name
+}
+
+func (id rowIdent) is(row []string, ns, name string) bool {
+	if len(row) == 0 {
+		return false
+	}
+	rns, rname := id.cells(row)
+	return rname == name && rns == ns
 }
 
 // lensAckGlyph is the spinner frame for the pane, or "" when nothing is
