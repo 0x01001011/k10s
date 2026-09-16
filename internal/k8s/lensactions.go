@@ -413,7 +413,11 @@ func (s *Store) LensAction(kind, ns, name, id, selected string, params map[strin
 			if err != nil {
 				return err
 			}
-			m, ok := tree.(map[string]any)
+			// An optional parameter nobody filled renders to "". Omitting the
+			// field is what that means; sending it empty is a different
+			// request — an empty recoveryTarget is a recovery target CNPG has
+			// to interpret, and the cluster never finishes bootstrapping.
+			m, ok := lens.Prune(tree).(map[string]any)
 			if !ok {
 				return fmt.Errorf("action %q: template is not an object", a.ID)
 			}

@@ -61,9 +61,21 @@ func (a Action) Fill(v Vars) Vars {
 		out[k] = val
 	}
 	for _, p := range a.Params {
-		if out[p.Name] == "" {
-			out[p.Name] = p.Default
+		if out[p.Name] != "" {
+			continue
 		}
+		// A default is a template like every other string in a pack. The
+		// restore form's "{{.Name}}-restore" is the case that proves it:
+		// copied verbatim, the braces reach the manifest and the preview.
+		//
+		// Rendered against v BEFORE the params exist, so a default may use
+		// .Name or .Namespace but not another parameter — which would need an
+		// evaluation order the schema does not express.
+		def, err := Render(p.Default, v)
+		if err != nil {
+			def = p.Default
+		}
+		out[p.Name] = def
 	}
 	v.Params = out
 	return v
@@ -132,6 +144,54 @@ func (a Action) CheckReady(v Vars) error {
 		return ErrSelectedRequired
 	}
 	return nil
+}
+
+// Prune drops empty-string leaves from a rendered create body, and then any
+// map left empty by that.
+//
+// An optional parameter that nobody filled renders to "". Sending it is not
+// the same as omitting it: bootstrap.recovery.recoveryTarget with an empty
+// targetTime is a recovery target CNPG must interpret, and a Cluster carrying
+// one never finishes bootstrapping. Omission is what "I did not choose a
+// recovery point" actually means.
+//
+// Only create bodies are pruned. An annotate action uses the empty string
+// deliberately — it is how un-fencing removes a key — and a patch may need to
+// write one.
+func Prune(node any) any {
+	switch n := node.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(n))
+		for k, val := range n {
+			p := Prune(val)
+			if p == nil {
+				continue
+			}
+			out[k] = p
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(n))
+		for _, e := range n {
+			if p := Prune(e); p != nil {
+				out = append(out, p)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case string:
+		if n == "" {
+			return nil
+		}
+		return n
+	default:
+		return node
+	}
 }
 
 // Check reports why an action cannot run right now, or nil.
@@ -259,6 +319,9 @@ func renderYAMLish(tree map[string]any, v Vars) string {
 	if err != nil {
 		return "{}"
 	}
+	// Pruned to match what Create actually sends. A preview showing a field
+	// the request omits is a preview of a different mutation.
+	r = Prune(r)
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return "{}"
