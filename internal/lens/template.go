@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -19,6 +20,9 @@ type Vars struct {
 	// snapshot. It defaults to Name, because for most actions the row's own
 	// name is exactly the right target.
 	Selected string
+	// Params are the action's collected parameters, reached in templates as
+	// {{.Params.<name>}}. Always non-nil after Action.Fill.
+	Params map[string]string
 }
 
 // ErrSelectedRequired means the action declares requiresSelection but nothing
@@ -35,6 +39,45 @@ func (v Vars) resolve() Vars {
 	if v.Selected == "" {
 		v.Selected = v.Name
 	}
+	// missingkey=error fires on a nil map too, so an action with no params
+	// would otherwise fail to render the moment any template mentioned
+	// .Params at all.
+	if v.Params == nil {
+		v.Params = map[string]string{}
+	}
+	return v
+}
+
+// Fill returns v with every declared param present: the caller's value where
+// they supplied one, the param's default everywhere else.
+//
+// It copies rather than writes through, because the UI holds one parameter map
+// per open form and re-renders the preview on every keystroke — filling in
+// place would make a default indistinguishable from something the operator
+// typed, and there would be no way back to "untouched".
+func (a Action) Fill(v Vars) Vars {
+	out := make(map[string]string, len(a.Params)+len(v.Params))
+	for k, val := range v.Params {
+		out[k] = val
+	}
+	for _, p := range a.Params {
+		if out[p.Name] != "" {
+			continue
+		}
+		// A default is a template like every other string in a pack. The
+		// restore form's "{{.Name}}-restore" is the case that proves it:
+		// copied verbatim, the braces reach the manifest and the preview.
+		//
+		// Rendered against v BEFORE the params exist, so a default may use
+		// .Name or .Namespace but not another parameter — which would need an
+		// evaluation order the schema does not express.
+		def, err := Render(p.Default, v)
+		if err != nil {
+			def = p.Default
+		}
+		out[p.Name] = def
+	}
+	v.Params = out
 	return v
 }
 
@@ -90,12 +133,107 @@ func RenderTree(node any, v Vars) (any, error) {
 	}
 }
 
-// Check reports why an action cannot run right now, or nil.
-func (a Action) Check(v Vars) error {
+// CheckReady reports why an action cannot even be OFFERED, or nil.
+//
+// It is deliberately narrower than Check: an unfilled parameter is not a
+// reason to grey out the button, it is the reason the button opens a form.
+// Disabling on it would make every parameterised action permanently
+// unreachable, since nothing can fill a form that never opens.
+func (a Action) CheckReady(v Vars) error {
 	if a.RequiresSelection && v.Selected == "" {
 		return ErrSelectedRequired
 	}
 	return nil
+}
+
+// Prune drops empty-string leaves from a rendered create body, and then any
+// map left empty by that.
+//
+// An optional parameter that nobody filled renders to "". Sending it is not
+// the same as omitting it: bootstrap.recovery.recoveryTarget with an empty
+// targetTime is a recovery target CNPG must interpret, and a Cluster carrying
+// one never finishes bootstrapping. Omission is what "I did not choose a
+// recovery point" actually means.
+//
+// Only create bodies are pruned. An annotate action uses the empty string
+// deliberately — it is how un-fencing removes a key — and a patch may need to
+// write one.
+func Prune(node any) any {
+	switch n := node.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(n))
+		for k, val := range n {
+			p := Prune(val)
+			if p == nil {
+				continue
+			}
+			out[k] = p
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(n))
+		for _, e := range n {
+			if p := Prune(e); p != nil {
+				out = append(out, p)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case string:
+		if n == "" {
+			return nil
+		}
+		return n
+	default:
+		return node
+	}
+}
+
+// Check reports why an action cannot run right now, or nil.
+//
+// Parameters are checked here rather than only in the form, because the form
+// is not the only caller: a key press fires the action directly when it has
+// nothing to ask, and a pack edited to add a required param must not turn that
+// into a write with an empty value.
+func (a Action) Check(v Vars) error {
+	if err := a.CheckReady(v); err != nil {
+		return err
+	}
+	for _, p := range a.Params {
+		val := v.Params[p.Name]
+		if val == "" {
+			if p.Required {
+				return fmt.Errorf("%s is required", p.label())
+			}
+			continue
+		}
+		// An empty Options list is not a closed list — it is a field with no
+		// suggestions, or one whose suggestions come from a cluster this
+		// check cannot reach.
+		if !p.AllowFree && len(p.Options) > 0 && !p.hasOption(val) {
+			return fmt.Errorf("%s: %q is not one of its allowed values", p.label(), val)
+		}
+		if p.Type == ParamInt {
+			if _, err := strconv.Atoi(val); err != nil {
+				return fmt.Errorf("%s: %q is not a whole number", p.label(), val)
+			}
+		}
+	}
+	return nil
+}
+
+// label is what to call the param when refusing. The declared label reads
+// better in a sentence; the name is the fallback and is never empty.
+func (p Param) label() string {
+	if p.Label != "" {
+		return p.Label
+	}
+	return p.Name
 }
 
 // Kubectl is the equivalent command, for the confirm modal to show.
@@ -105,7 +243,12 @@ func (a Action) Check(v Vars) error {
 // a correctness property rather than a nicety — the rendered command must
 // describe the same mutation the request performs.
 func Kubectl(a Action, resource, ns, name string, v Vars) string {
-	v = v.resolve()
+	// Fill, not just resolve: an untouched parameter has to render its
+	// DEFAULT, because that is the value the request will carry. Rendering it
+	// empty would show a manifest the server never receives, and leaving the
+	// key absent would fail the template outright — mid-form, which is the
+	// preview's normal state, not an error.
+	v = a.Fill(v).resolve()
 	target := resource
 	if a.Target != "" {
 		if _, _, r, err := ParseGVR(a.Target); err == nil {
@@ -176,6 +319,9 @@ func renderYAMLish(tree map[string]any, v Vars) string {
 	if err != nil {
 		return "{}"
 	}
+	// Pruned to match what Create actually sends. A preview showing a field
+	// the request omits is a preview of a different mutation.
+	r = Prune(r)
 	b, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return "{}"

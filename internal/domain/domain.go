@@ -267,6 +267,38 @@ type LensActionSpec struct {
 	// reason mentioning "the selected revision" would open an input box
 	// instead of refusing.
 	NeedsSelection bool
+
+	// Params are the values to collect before running, with their suggestions
+	// ALREADY resolved against the cluster. The UI never evaluates a JSONPath
+	// or touches a lister; it draws what it is given.
+	Params []LensParamSpec
+	// ConfirmValue is the template for the word a typed confirmation must
+	// match, or "" to fall back to the object's own name.
+	ConfirmValue string
+}
+
+// LensOption is one suggestion for a parameter. Note is the reason to pick it
+// — "primary", "fenced", "completed 4h ago" — which is what the operator is
+// actually choosing between; the value alone is often just a pod suffix.
+type LensOption struct {
+	Value string
+	Note  string
+}
+
+// LensParamSpec is one parameter as the UI needs it to draw a field.
+type LensParamSpec struct {
+	Name    string
+	Label   string
+	Type    string
+	Default string
+	Options []LensOption
+	// OptionsNote explains an EMPTY option list. "Not loaded" and "there are
+	// none" are different answers, and only one of them is fixed by opening
+	// that kind — a form that renders both as a blank list tells the operator
+	// nothing about which they are looking at.
+	OptionsNote string
+	AllowFree   bool
+	Required    bool
 }
 
 // LensVerbs runs a lens pack's declarative actions. A backend that does not
@@ -276,7 +308,18 @@ type LensVerbs interface {
 	// LensAction runs the verb and returns the value the controller is
 	// expected to echo back, or "" when the action declares no
 	// acknowledgement. The caller holds it and hands it to LensAck.
-	LensAction(kind, ns, name, id, selected string) (ack string, err error)
+	//
+	// params carries the form's answers. A nil map is the normal case for an
+	// action that asks nothing.
+	LensAction(kind, ns, name, id, selected string, params map[string]string) (ack string, err error)
+	// LensPreview renders the equivalent kubectl command for the parameters
+	// currently in the form.
+	//
+	// It is separate from the Kubectl string on LensActionSpec because that
+	// one is computed once per selection, while this changes on every
+	// keystroke — and a preview that lags the form describes a mutation other
+	// than the one about to happen.
+	LensPreview(kind, ns, name, id, selected string, params map[string]string) string
 	// LensAck reports whether the controller has acknowledged the write.
 	//
 	// want is what LensAction returned. Comparing against it is the whole

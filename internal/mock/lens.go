@@ -52,9 +52,47 @@ var demoLensRows = map[string][][]string{
 		{"finance", "finance", "", "31d"},
 		{"data", "data", "", "31d"},
 	},
+	// Three clusters, each carrying one of the failures the new columns exist
+	// to surface — a failover in progress, a broken WAL archive, and a
+	// three-instance cluster sitting on a single node.
+	//
+	// The WAL one is the case worth staring at: orders-db reports "Cluster in
+	// healthy state" with every instance ready, and its archive is dead. That
+	// is exactly how it looks in production, and exactly why the column is
+	// there.
 	"cnpg-clusters": {
-		{"reporting-db", "2", "3", "reporting-db-2", "Failing over", "9", "21d"},
-		{"orders-db", "3", "3", "orders-db-1", "Cluster in healthy state", "4", "63d"},
+		{"orders-db", "3", "3", "orders-db-1", "Cluster in healthy state", "False", "3", "4", "63d"},
+		{"reporting-db", "2", "3", "reporting-db-2", "Failing over", "True", "3", "9", "21d"},
+		{"billing-db", "3", "3", "billing-db-1", "Cluster in healthy state", "True", "1", "2", "12d"},
+	},
+	"cnpg-backups": {
+		{"orders-db-k10s-8f21", "orders-db", "walArchivingFailing", "barmanObjectStore", "2h", "unexpected failure invoking barman-cloud-wal-archive: exit status 2"},
+		{"reporting-db-daily-9c02", "reporting-db", "running", "volumeSnapshot", "", ""},
+		{"orders-db-daily-7b31", "orders-db", "completed", "barmanObjectStore", "26h", ""},
+		{"billing-db-daily-2e40", "billing-db", "completed", "barmanObjectStore", "4h", ""},
+	},
+	"cnpg-scheduledbackups": {
+		{"reporting-db-nightly", "reporting-db", "0 0 2 * * *", "true", "31h", "cannot schedule while the cluster is failing over"},
+		{"orders-db-nightly", "orders-db", "0 0 1 * * *", "false", "26h", ""},
+		{"billing-db-nightly", "billing-db", "0 0 3 * * *", "false", "4h", ""},
+	},
+	"cnpg-poolers": {
+		{"orders-rw", "orders-db", "rw", "2", "failed", "63d"},
+		{"billing-ro", "billing-db", "ro", "3", "paused", "12d"},
+		{"orders-ro", "orders-db", "ro", "2", "active", "63d"},
+	},
+	"cnpg-databases": {
+		{"orders-app", "orders-db", "orders", "app", "false", `pq: permission denied to create database`, "63d"},
+		{"billing-app", "billing-db", "billing", "app", "true", "", "12d"},
+	},
+	"cnpg-publications": {
+		{"orders-outbox", "orders-db", "orders", "true", "", "40d"},
+	},
+	"cnpg-subscriptions": {
+		{"billing-from-orders", "billing-db", "billing", "orders-outbox", "false", `could not connect to the publisher: timeout expired`, "40d"},
+	},
+	"cnpg-imagecatalogs": {
+		{"postgres-supported", "17 18", "3", "90d"},
 	},
 	"lh-volumes": {
 		{"pvc-b73e19da", "attached", "degraded", "200Gi", "ip-10-0-3-17", "search-index", "search-0", "v1", "12d"},
@@ -175,16 +213,70 @@ func (s *Source) LensActions(kind, ns, name, selected string) []domain.LensActio
 		}
 		spec := domain.LensActionSpec{
 			ID: a.ID, Label: a.Label, Confirm: a.Confirm,
-			Notice: a.Notice, AckPath: a.Ack,
+			Notice: a.Notice, AckPath: a.Ack, ConfirmValue: a.ConfirmValue,
 			Kubectl: lens.Kubectl(a, resourceOf(k), ns, name, v),
+			Params:  demoParamSpecs(a, v),
 		}
-		if err := a.Check(v); err != nil {
+		// CheckReady, not Check: an unfilled parameter opens the form, it does
+		// not disable the button.
+		if err := a.CheckReady(v); err != nil {
 			spec.Disabled, spec.DisabledWhy = true, err.Error()
 			spec.NeedsSelection = errors.Is(err, lens.ErrSelectedRequired)
 		}
 		out = append(out, spec)
 	}
 	return out
+}
+
+// demoParamSpecs carries an action's parameters into the demo.
+//
+// A live optionsFrom has nothing to read offline, so its suggestions come from
+// demoLensOptions — a fixture keyed by kind and parameter. Inventing them from
+// the pack would make the demo claim a cluster shape it cannot show, and
+// leaving them empty would make the form look broken in every screenshot.
+func demoParamSpecs(a lens.Action, v lens.Vars) []domain.LensParamSpec {
+	if len(a.Params) == 0 {
+		return nil
+	}
+	// Defaults are templates and are rendered here, exactly as the real
+	// backend renders them — otherwise the demo shows "{{.Name}}-restore" in
+	// the field, and every screenshot taken from it shows it too.
+	filled := a.Fill(v).Params
+	out := make([]domain.LensParamSpec, 0, len(a.Params))
+	for _, p := range a.Params {
+		spec := domain.LensParamSpec{
+			Name: p.Name, Label: p.Label, Type: p.Type, Default: filled[p.Name],
+			AllowFree: p.AllowFree, Required: p.Required,
+		}
+		if spec.Label == "" {
+			spec.Label = p.Name
+		}
+		for _, o := range p.Options {
+			spec.Options = append(spec.Options, domain.LensOption{Value: o.Value, Note: o.Note})
+		}
+		if p.OptionsFrom != "" {
+			spec.Options = append(spec.Options, demoLensOptions(p.OptionsFrom, v.Name)...)
+		}
+		out = append(out, spec)
+	}
+	return out
+}
+
+// demoLensOptions fakes one live option source.
+//
+// Instance names are derived from the row's own name because that is how CNPG
+// names them — "<cluster>-1", "<cluster>-2" — so the demo teaches the real
+// convention rather than a set of invented strings.
+func demoLensOptions(source, name string) []domain.LensOption {
+	switch source {
+	case ".status.instanceNames":
+		return []domain.LensOption{
+			{Value: name + "-1", Note: "primary"},
+			{Value: name + "-2", Note: "replica"},
+			{Value: name + "-3", Note: "replica"},
+		}
+	}
+	return nil
 }
 
 // resourceOf is the plural the kubectl line needs, taken off the declared
@@ -196,7 +288,7 @@ func resourceOf(k lens.Kind) string {
 
 // LensAction pretends to write, and hands back a token so the demo shows
 // the same acknowledgement wait a real controller produces.
-func (s *Source) LensAction(kind, ns, name, id, selected string) (string, error) {
+func (s *Source) LensAction(kind, ns, name, id, selected string, params map[string]string) (string, error) {
 	p, _, ok := lensKindOf(kind)
 	if !ok {
 		return "", fmt.Errorf("unknown kind %q", kind)
@@ -204,6 +296,16 @@ func (s *Source) LensAction(kind, ns, name, id, selected string) (string, error)
 	a, ok := p.Action(id)
 	if !ok {
 		return "", fmt.Errorf("lens %q has no action %q", p.Name, id)
+	}
+	// The demo refuses what the real backend refuses. A form that submits
+	// happily here and is rejected against a cluster teaches the wrong thing
+	// about the gate.
+	v := a.Fill(lens.Vars{
+		Name: name, Namespace: ns, Context: contexts[s.ctxIdx],
+		Now: time.Now().UTC().Format(time.RFC3339), Selected: selected, Params: params,
+	})
+	if err := a.Check(v); err != nil {
+		return "", err
 	}
 	if a.Ack == "" {
 		return "", nil
@@ -218,6 +320,22 @@ func (s *Source) LensAction(kind, ns, name, id, selected string) (string, error)
 	s.lensAcks[tok] = time.Now().Add(2500 * time.Millisecond)
 	s.mu.Unlock()
 	return tok, nil
+}
+
+// LensPreview renders the command for the parameters currently in the form.
+func (s *Source) LensPreview(kind, ns, name, id, selected string, params map[string]string) string {
+	p, k, ok := lensKindOf(kind)
+	if !ok {
+		return ""
+	}
+	a, ok := p.Action(id)
+	if !ok {
+		return ""
+	}
+	return lens.Kubectl(a, resourceOf(k), ns, name, lens.Vars{
+		Name: name, Namespace: ns, Context: contexts[s.ctxIdx],
+		Now: time.Now().UTC().Format(time.RFC3339), Selected: selected, Params: params,
+	})
 }
 
 // LensAck reports the pretend controller as done once its delay has passed.

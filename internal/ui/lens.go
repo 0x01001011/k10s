@@ -99,8 +99,15 @@ func (m *Model) selectedFor(row string) string {
 // because every letter worth having is already an action or a plugin
 // shortcut, and because "2" reads as "the second one in the list" without
 // anybody having to learn a mnemonic.
+// The tenth is "0", continuing the row of digits rather than stopping at nine.
+// CNPG has exactly ten verbs, and the tenth is Wake — so a nine-key limit made
+// hibernating a cluster reachable and un-hibernating it not, which is a trap
+// rather than a limitation.
 func lensKeyFor(i int) string {
-	if i > 8 {
+	switch {
+	case i == 9:
+		return "0"
+	case i > 9:
 		return ""
 	}
 	return strconv.Itoa(i + 1)
@@ -157,7 +164,15 @@ func (m *Model) fireLensAction(sp domain.LensActionSpec) tea.Cmd {
 		return nil
 	}
 
-	run := func(mm *Model) tea.Cmd { return mm.runLensAction(kind, ns, name, short, sp) }
+	// An action that declares parameters collects them in a form, which owns
+	// its own confirmation: the word to type is one of the values being
+	// chosen, so it cannot be settled before they are.
+	if len(sp.Params) > 0 {
+		m.openLensForm(kind, ns, name, short, sp)
+		return nil
+	}
+
+	run := func(mm *Model) tea.Cmd { return mm.runLensAction(kind, ns, name, short, sp, nil) }
 
 	switch sp.Confirm {
 	case "typed":
@@ -184,8 +199,10 @@ func (m *Model) fireLensAction(sp domain.LensActionSpec) tea.Cmd {
 // equivalent kubectl line. Showing the command is not decoration: it is how
 // an operator checks that the button does what they think, and how they
 // reproduce it in a runbook afterwards.
+// The label is NOT repeated here: overlayConfirm already renders it as the
+// modal's title, and a 58-column box cannot spare a row to say it twice.
 func lensConfirmBody(sp domain.LensActionSpec, short, ns, name string) []string {
-	body := []string{sp.Label, short + "/" + name}
+	body := []string{short + "/" + name}
 	if ns != "" {
 		body = append(body, "namespace: "+ns)
 	}
@@ -224,7 +241,7 @@ func wrapNotice(s string, width int) []string {
 
 // runLensAction performs the write, then starts waiting for the controller
 // if the action declares an acknowledgement field.
-func (m *Model) runLensAction(kind, ns, name, short string, sp domain.LensActionSpec) tea.Cmd {
+func (m *Model) runLensAction(kind, ns, name, short string, sp domain.LensActionSpec, params map[string]string) tea.Cmd {
 	lv, ok := m.src.(domain.LensVerbs)
 	if !ok {
 		return nil
@@ -235,7 +252,7 @@ func (m *Model) runLensAction(kind, ns, name, short string, sp domain.LensAction
 	seq := m.lensSeq
 	m.startBusy(label)
 	return func() tea.Msg {
-		ack, err := lv.LensAction(kind, ns, name, sp.ID, sel)
+		ack, err := lv.LensAction(kind, ns, name, sp.ID, sel, params)
 		return lensDoneMsg{
 			kind: kind, ns: ns, name: name,
 			id: sp.ID, label: label, seq: seq,

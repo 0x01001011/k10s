@@ -176,6 +176,12 @@ demo: install
     printf 'onboarded: true\nupdate:\n  disabled: true\n' > /tmp/k10s-demo-config.yaml
     vhs assets/demo.tape
 
+# Record the CNPG parameter-form clip (needs charmbracelet/vhs + k10s on PATH).
+demo-cnpg: install
+    printf 'onboarded: true\nupdate:\n  disabled: true\n' > /tmp/k10s-demo-config.yaml
+    vhs assets/cnpg-form.tape
+    @ls -lh assets/cnpg-form.gif
+
 # Needs charmbracelet/vhs, imagemagick and a JetBrainsMono Nerd Font
 # (`brew install vhs imagemagick && brew install --cask font-jetbrains-mono-nerd-font`).
 # Runs against the offline demo backend, so no real cluster ends up in the

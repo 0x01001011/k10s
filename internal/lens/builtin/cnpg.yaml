@@ -1,16 +1,21 @@
 # CloudNativePG — postgresql.cnpg.io/v1, one served version.
 #
-# Every high-stakes action is one annotation or one status patch. Promoting
-# a Postgres primary from a TUI is exactly the moment you would otherwise
-# be googling the kubectl incantation.
+# Every high-stakes action is one annotation, one status patch, or one created
+# object. Promoting a Postgres primary from a TUI is exactly the moment you
+# would otherwise be googling the kubectl incantation.
 #
 # .status.phase is a human sentence, not a slug ("Cluster is unrecoverable
 # and needs manual intervention"), so the severity table names the one good
 # value and defaults the rest to warn.
 #
 # Backup recency deliberately does NOT read .status.lastSuccessfulBackup:
-# that whole family is deprecated because backup moved to the CNPG-I
-# plugin. It comes from Backup CRs instead.
+# that whole family is documented as "not set for backup plugins", and the
+# Barman Cloud plugin is the supported path from 1.26 on. It comes from
+# Backup CRs instead.
+#
+# Field and annotation references throughout:
+#   https://cloudnative-pg.io/docs/1.30/cloudnative-pg.v1
+#   https://cloudnative-pg.io/docs/1.30/labels_annotations
 name: cnpg
 requires:
   - postgresql.cnpg.io/v1
@@ -24,9 +29,29 @@ severities:
     warn: [pending, started, running, finalizing]
     error: [failed, walArchivingFailing, "invalid backup definition"]
     default: unknown
+  # Pooler.status.phase is an ENUM, unlike the Cluster's sentence — active,
+  # paused, inactive, failed. The pack used to name "Pooler is ready" here,
+  # which CNPG never writes, so every healthy PgBouncer graded warn.
   pooler-phase:
-    ok: ["Pooler is ready"]
+    ok: [active]
+    warn: [paused, inactive]
+    error: [failed]
     default: warn
+  # ContinuousArchiving=False means barman-cloud-wal-archive is failing. WAL
+  # stops being shipped, the recovery window stops advancing, and pg_wal grows
+  # until the volume fills. Nothing else on the row changes while this is
+  # happening — the cluster reports healthy — which is what makes it the single
+  # most valuable cell in the table.
+  condition:
+    ok: ["True"]
+    error: ["False"]
+    default: unknown
+  # applied:false on a declarative object means the object exists and the
+  # database change did not happen. That is a failure, not a neutral state.
+  applied:
+    ok: ["true"]
+    error: ["false"]
+    default: unknown
 
 kinds:
   - key: cnpg-clusters
@@ -41,6 +66,22 @@ kinds:
       - {header: INSTANCES, path: .status.instances, format: int}
       - {header: PRIMARY, path: .status.currentPrimary}
       - {header: PHASE, path: .status.phase, severity: cluster-phase}
+      # The WAL archive. See the `condition` severity table above.
+      - header: WAL
+        path: '.status.conditions[?(@.type=="ContinuousArchiving")].status'
+        severity: condition
+      # Distinct nodes hosting instances. 1 alongside several instances means
+      # every replica shares a failure domain with the primary — the HA is
+      # decorative. This is what cnpg_collector_nodes_used measures, without
+      # Prometheus.
+      #
+      # Deliberately UNGRADED. The severity tables map a value, and whether 1
+      # is bad depends on a second cell: a single-instance cluster on one node
+      # is correct, a three-instance cluster on one node is not. Grading "1"
+      # warn would paint every dev cluster amber forever — the same mistake
+      # this pack just fixed in pooler-phase. Comparing it to INSTANCES is the
+      # reader's job until the schema can express a comparison.
+      - {header: NODES, path: .status.topology.nodesUsed, format: int}
       - {header: TIMELINE, path: .status.timelineID, format: int}
       - {header: AGE, path: .metadata.creationTimestamp, format: age}
     actions:
@@ -48,6 +89,8 @@ kinds:
       - yaml
       - cnpg-promote
       - cnpg-backup
+      - cnpg-restore
+      - cnpg-scale
       - cnpg-restart
       - cnpg-reload
       - cnpg-fence
@@ -81,8 +124,8 @@ kinds:
       - {header: NAME, path: .metadata.name}
       - {header: CLUSTER, path: .spec.cluster.name}
       - {header: SCHEDULE, path: .spec.schedule}
+      - {header: SUSPENDED, path: .spec.suspend, format: bool}
       - {header: LAST, path: .status.lastScheduleTime, format: age}
-      - {header: NEXT, path: .status.nextScheduleTime}
       - {header: ERROR, path: .status.error}
     actions: [describe, yaml, edit, delete]
 
@@ -99,30 +142,129 @@ kinds:
       - {header: INSTANCES, path: .status.instances, format: int}
       - {header: PHASE, path: .status.phase, severity: pooler-phase}
       - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, cnpg-pooler-scale, edit, delete]
+
+  # The declarative CRDs, CNPG 1.25 and after. Each carries the same tiny
+  # status — applied plus a message — so one shape covers all four.
+  - key: cnpg-databases
+    name: PG Databases
+    short: pgdb
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/databases
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CLUSTER, path: .spec.cluster.name}
+      - {header: DATABASE, path: .spec.name}
+      - {header: OWNER, path: .spec.owner}
+      - {header: APPLIED, path: .status.applied, severity: applied}
+      - {header: MESSAGE, path: .status.message}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: cnpg-publications
+    name: PG Publications
+    short: pgpub
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/publications
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CLUSTER, path: .spec.cluster.name}
+      - {header: DBNAME, path: .spec.dbname}
+      - {header: APPLIED, path: .status.applied, severity: applied}
+      - {header: MESSAGE, path: .status.message}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  - key: cnpg-subscriptions
+    name: PG Subscriptions
+    short: pgsub
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/subscriptions
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: CLUSTER, path: .spec.cluster.name}
+      - {header: DBNAME, path: .spec.dbname}
+      - {header: PUBLICATION, path: .spec.publicationName}
+      - {header: APPLIED, path: .status.applied, severity: applied}
+      - {header: MESSAGE, path: .status.message}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
+    actions: [describe, yaml, edit, delete]
+
+  # ImageCatalog has no status at all, so APPLIED reads the spec instead: the
+  # column exists on every declarative kind and an empty one would look like a
+  # field k10s failed to read.
+  - key: cnpg-imagecatalogs
+    name: PG Image Catalogs
+    short: pgic
+    group: CloudNativePG
+    gvr: postgresql.cnpg.io/v1/imagecatalogs
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      # Quoted: inside flow braces a bare * is a YAML alias indicator.
+      - {header: IMAGES, path: '.spec.images[*].major'}
+      - {header: APPLIED, path: .metadata.generation, format: int}
+      - {header: AGE, path: .metadata.creationTimestamp, format: age}
     actions: [describe, yaml, edit, delete]
 
 actions:
   # What kubectl-cnpg's promote command does: patch clusters/status under
-  # optimistic lock. .Selected is the instance pod chosen in the picker.
+  # optimistic lock, setting targetPrimary and the phase that goes with it.
+  #
+  # The instance is a POD ("<cluster>-2"), never the Cluster's own name, and it
+  # comes from the cluster's own status rather than the operator's memory.
   - id: cnpg-promote
     label: Promote instance to primary
     verb: status-patch
     confirm: typed
+    confirmValue: "{{.Params.instance}}"
     retryOnConflict: true
-    # targetPrimary is an INSTANCE (a pod, "<cluster>-2"), never the Cluster's
-    # own name. docs/lenses.md once showed {{.Name}} here; that was wrong.
-    requiresSelection: true
+    notice: >-
+      Switches the primary to the chosen instance. Connections to the current
+      primary are dropped. CNPG waits switchoverDelay (3600s by default) before
+      forcing the old primary down.
+    params:
+      - name: instance
+        label: instance
+        required: true
+        optionsFrom: .status.instanceNames
+    # kubectl-cnpg refuses to promote while the cluster carries a fencing
+    # annotation: a fenced instance has no running Postgres to promote, so the
+    # patch would set targetPrimary and then stall in "Switchover in progress".
+    refuseWhen:
+      - path: .metadata.annotations['cnpg.io/fencedInstances']
+        reason: this cluster has fenced instances — unfence before promoting
     patch:
       status:
-        targetPrimary: "{{.Selected}}"
+        targetPrimary: "{{.Params.instance}}"
         targetPrimaryTimestamp: "{{.Now}}"
         phase: Switchover in progress
         phaseReason: Switchover requested from k10s
 
+  # Backup.spec is IMMUTABLE after creation, so a wrong method cannot be edited
+  # — only deleted and recreated. That is why these are chosen up front rather
+  # than left to be corrected afterwards.
   - id: cnpg-backup
     label: Back up now
     verb: create
     confirm: "true"
+    params:
+      - name: method
+        label: method
+        default: barmanObjectStore
+        options:
+          - {value: barmanObjectStore, note: object store (deprecated in-tree)}
+          - {value: volumeSnapshot, note: CSI snapshot}
+          - {value: plugin, note: CNPG-I, needs pluginConfiguration}
+      - name: target
+        label: target
+        default: prefer-standby
+        options:
+          - {value: primary, note: reads from the primary}
+          - {value: prefer-standby, note: spares the primary}
     template:
       apiVersion: postgresql.cnpg.io/v1
       kind: Backup
@@ -132,11 +274,92 @@ actions:
       spec:
         cluster:
           name: "{{.Name}}"
+        method: "{{.Params.method}}"
+        target: "{{.Params.target}}"
+
+  # CNPG never restores in place. Recovery is always a NEW Cluster bootstrapped
+  # from a backup, which is the single most surprising thing about it for
+  # anyone arriving from a traditional Postgres setup — hence the notice.
+  #
+  # Recovery targets are mutually exclusive apart from targetTLI, so exactly one
+  # is offered. A manifest naming two never bootstraps.
+  - id: cnpg-restore
+    label: Restore to a new cluster
+    verb: create
+    confirm: typed
+    confirmValue: "{{.Params.name}}"
+    notice: >-
+      Creates a NEW cluster and restores into it. The cluster you are on is not
+      touched and is not repaired. Leave the recovery time empty to restore to
+      the latest point in the backup's WAL archive.
+    params:
+      - name: name
+        label: new cluster
+        required: true
+        allowFree: true
+        default: "{{.Name}}-restore"
+      - name: source
+        label: source backup
+        required: true
+        optionsFrom: postgresql.cnpg.io/v1/backups
+      # A timestamp cannot be enumerated from the cluster, so this one is
+      # genuinely free text. CNPG accepts RFC3339 or a Postgres timestamp.
+      - name: targetTime
+        label: recovery time
+        allowFree: true
+    template:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: "{{.Params.name}}"
+        namespace: "{{.Namespace}}"
+      spec:
+        instances: 1
+        bootstrap:
+          recovery:
+            backup:
+              name: "{{.Params.source}}"
+            recoveryTarget:
+              targetTime: "{{.Params.targetTime}}"
+
+  - id: cnpg-scale
+    label: Scale instances
+    verb: patch
+    confirm: "true"
+    notice: >-
+      Scaling down removes the highest-numbered instances and their PVCs are
+      retained, not deleted.
+    params:
+      - name: instances
+        label: instances
+        type: int
+        required: true
+        allowFree: true
+    patch:
+      spec:
+        instances: "{{.Params.instances}}"
+
+  - id: cnpg-pooler-scale
+    label: Scale pooler
+    verb: patch
+    confirm: "true"
+    params:
+      - name: instances
+        label: instances
+        type: int
+        required: true
+        allowFree: true
+    patch:
+      spec:
+        instances: "{{.Params.instances}}"
 
   - id: cnpg-restart
     label: Rolling restart
     verb: annotate
     confirm: "true"
+    notice: >-
+      Restarts replicas first, then the primary according to
+      primaryUpdateStrategy and primaryUpdateMethod.
     annotations:
       kubectl.kubernetes.io/restartedAt: "{{.Now}}"
 
@@ -147,15 +370,22 @@ actions:
       cnpg.io/reloadedAt: "{{.Now}}"
 
   # The value is a JSON-encoded array, not a bare name. "*" fences every
-  # instance in the cluster.
+  # instance in the cluster, which stops Postgres everywhere.
   - id: cnpg-fence
     label: Fence instance
     verb: annotate
     confirm: typed
-    # Same as promote: the value is an instance pod name, not the Cluster's.
-    requiresSelection: true
+    confirmValue: "{{.Params.instance}}"
+    notice: >-
+      Stops Postgres on the chosen instance while keeping the pod and its data.
+      Fencing the primary takes the database down.
+    params:
+      - name: instance
+        label: instance
+        required: true
+        optionsFrom: .status.instanceNames
     annotations:
-      cnpg.io/fencedInstances: '["{{.Selected}}"]'
+      cnpg.io/fencedInstances: '["{{.Params.instance}}"]'
 
   - id: cnpg-unfence
     label: Unfence
@@ -168,6 +398,9 @@ actions:
     label: Hibernate cluster
     verb: annotate
     confirm: typed
+    notice: >-
+      Deletes every pod and keeps every PVC. The database is unreachable until
+      it is woken.
     annotations:
       cnpg.io/hibernation: "on"
 
@@ -193,7 +426,23 @@ edges:
     to: postgresql.cnpg.io/v1/clusters
     via: field
     key: .spec.cluster.name
+  - from: postgresql.cnpg.io/v1/scheduledbackups
+    to: postgresql.cnpg.io/v1/clusters
+    via: field
+    key: .spec.cluster.name
   - from: postgresql.cnpg.io/v1/poolers
+    to: postgresql.cnpg.io/v1/clusters
+    via: field
+    key: .spec.cluster.name
+  - from: postgresql.cnpg.io/v1/databases
+    to: postgresql.cnpg.io/v1/clusters
+    via: field
+    key: .spec.cluster.name
+  - from: postgresql.cnpg.io/v1/publications
+    to: postgresql.cnpg.io/v1/clusters
+    via: field
+    key: .spec.cluster.name
+  - from: postgresql.cnpg.io/v1/subscriptions
     to: postgresql.cnpg.io/v1/clusters
     via: field
     key: .spec.cluster.name

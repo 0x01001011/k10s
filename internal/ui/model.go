@@ -217,7 +217,11 @@ type Model struct {
 	// answer leaks onto the next row, which is how you fence the wrong
 	// cluster with no prompt.
 	lensSelKey string
-	lensAck    *lensAckState
+	// lensForm is the open parameter form, or nil. It captures the keyboard
+	// ahead of the confirm modal, because a form that is filling in a field
+	// owns every letter that arrives.
+	lensForm *lensFormState
+	lensAck  *lensAckState
 	// lensSeq numbers write requests so a superseded one's reply cannot
 	// clear the spinner belonging to a newer one.
 	lensSeq int
@@ -1301,6 +1305,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	if key == "ctrl+c" {
 		return tea.Quit
+	}
+
+	// The parameter form captures everything, ahead of the confirm modal: it
+	// is a text field with a suggestion list, so every letter belongs to it.
+	if m.lensForm != nil {
+		return m.handleLensFormKey(msg)
 	}
 
 	// confirm modal captures everything
@@ -2939,5 +2949,5 @@ func (m *Model) mark(id, s string) string {
 // popup but not to its left. It fails closed (a fully covered zone ends up
 // zero-width, which inBounds rejects), never onto the wrong target.
 func (m *Model) modalOpen() bool {
-	return m.confirm != nil || m.setOpen || m.themeOpen || m.palOpen
+	return m.confirm != nil || m.lensForm != nil || m.setOpen || m.themeOpen || m.palOpen
 }

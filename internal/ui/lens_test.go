@@ -211,12 +211,15 @@ func TestTypedConfirmBackspaceDisarms(t *testing.T) {
 	}
 }
 
-// An action that needs an instance asks for one instead of being unreachable.
-// Seven of the shipped verbs are in this shape — a CNPG instance is
-// "my-db-2", never the cluster's own name, so there is nothing to default to.
-func TestActionNeedingAnInstanceAsksForOne(t *testing.T) {
+// An action that needs a sub-row asks for one instead of being unreachable.
+//
+// CNPG has moved to parameters, so the pack under test here is Kargo, whose
+// re-verify still needs a verification id that is not the row's name. The
+// mechanism is still live for argocd, kargo and longhorn and still needs its
+// gate tested.
+func TestActionNeedingASelectionAsksForOne(t *testing.T) {
 	m := demoProd(t)
-	selectLensKind(t, m, "cnpg-clusters")
+	selectLensKind(t, m, "kargo-stages")
 
 	var need domain.LensActionSpec
 	for _, sp := range m.lensActions() {
@@ -226,18 +229,58 @@ func TestActionNeedingAnInstanceAsksForOne(t *testing.T) {
 		}
 	}
 	if need.ID == "" {
-		t.Fatal("no shipped CNPG action requires a selection; the gate is untested")
+		t.Fatal("no shipped action requires a selection; the gate is untested")
 	}
 	m.fireLensAction(need)
 	if m.confirm == nil || m.confirm.ask == "" {
-		t.Fatalf("firing %q did not ask which instance to act on", need.ID)
+		t.Fatalf("firing %q did not ask what to act on", need.ID)
 	}
 	if m.confirm.armed() {
-		t.Error("an unanswered question is armed; Enter would run the action with no instance")
+		t.Error("an unanswered question is armed; Enter would run the action with nothing named")
 	}
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	if !m.confirm.armed() {
 		t.Error("an answered question is still not armed")
+	}
+}
+
+// The CNPG half of the same guarantee, on the new mechanism: fencing opens a
+// form listing the cluster's instances rather than a free-text box.
+func TestCnpgFenceOpensAFormOfInstances(t *testing.T) {
+	m := demoProd(t)
+	selectLensKind(t, m, "cnpg-clusters")
+
+	var fence domain.LensActionSpec
+	for _, sp := range m.lensActions() {
+		if sp.ID == "cnpg-fence" {
+			fence = sp
+		}
+	}
+	if fence.ID == "" {
+		t.Fatal("cnpg-fence missing from the pane")
+	}
+	if fence.Disabled {
+		t.Errorf("fence is disabled (%q); a parameterised action opens a form instead", fence.DisabledWhy)
+	}
+
+	m.fireLensAction(fence)
+	if m.lensForm == nil {
+		t.Fatal("firing fence did not open a form")
+	}
+	if m.confirm != nil {
+		t.Error("fence opened the old confirm modal as well as a form")
+	}
+	f := m.lensForm.fields[0]
+	if len(f.filtered) == 0 {
+		t.Fatal("the instance field offers no suggestions")
+	}
+	// The demo derives them from the row's own name, the way CNPG names
+	// instances — so the form teaches the real convention.
+	if !strings.HasPrefix(f.filtered[0].Value, m.curName()) {
+		t.Errorf("first suggestion %q is not an instance of %q", f.filtered[0].Value, m.curName())
+	}
+	if m.lensForm.ready() {
+		t.Error("the form is ready before a required instance is chosen")
 	}
 }
 
