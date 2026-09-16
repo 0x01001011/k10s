@@ -321,6 +321,58 @@ func (st *lensFormState) unreadyWhy() string {
 	return "the form is incomplete"
 }
 
+// wrapPreview wraps one line of a command, KEEPING its leading whitespace.
+//
+// wrapNotice splits on Fields, which is right for prose and wrong here: a
+// create action's preview is an indented JSON manifest, and collapsing the
+// indentation flattens every nested key to the same level. A reader checking
+// whether `targetTime` sits under `recoveryTarget` or beside it then cannot
+// tell, which is the one question the preview is there to answer.
+func wrapPreview(s string, width int) []string {
+	if width < 8 {
+		width = 8
+	}
+	indent := s[:len(s)-len(strings.TrimLeft(s, " "))]
+	if lipgloss.Width(s) <= width {
+		return []string{s}
+	}
+	// Continuation lines are indented one step further than the line they
+	// continue, so a wrapped value is visibly not a new key.
+	cont := indent + "  "
+	var (
+		out  []string
+		line = indent
+	)
+	for _, w := range strings.Fields(s) {
+		switch {
+		case strings.TrimSpace(line) == "":
+			line += w
+		case lipgloss.Width(line)+1+lipgloss.Width(w) <= width:
+			line += " " + w
+		default:
+			out = append(out, line)
+			line = cont + w
+		}
+		// A word longer than the box is not hypothetical here: JSON values
+		// have no spaces, so a long cluster name or an object-store URL is one
+		// token. Wrapping only at spaces would push it straight through the
+		// border — the same overflow the confirm modal was fixed for.
+		for lipgloss.Width(line) > width {
+			cut := width
+			r := []rune(line)
+			if cut > len(r) {
+				cut = len(r)
+			}
+			out = append(out, string(r[:cut]))
+			line = cont + string(r[cut:])
+		}
+	}
+	if strings.TrimSpace(line) != "" {
+		out = append(out, line)
+	}
+	return out
+}
+
 // lensFormMaxOptions caps the suggestion list. A cluster with two hundred
 // Backups would otherwise push the preview and the buttons off the screen —
 // and the typeahead is the way through a long list, not scrolling it.
@@ -354,7 +406,7 @@ func (m *Model) overlayLensForm(root Block) Block {
 		// against; a command ending in an ellipsis hides the half that says
 		// which instance it names.
 		for _, ln := range st.preview {
-			for _, seg := range wrapNotice(ln, textW) {
+			for _, seg := range wrapPreview(ln, textW) {
 				body = append(body, paint(th.Bg, th.Subtle, false, "  "+seg))
 			}
 		}

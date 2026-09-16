@@ -19,6 +19,39 @@ Cutting one is four steps, in order — see
   `time LEVEL message │ k=v`, with the duplicate record timestamp dropped.
 - `f` filters log lines live (`-term` excludes), `w` cycles the level floor
   (all → INFO → WARN → ERROR), `t` shows the raw lines again.
+- Lens actions can declare `params`: values collected in a form before the
+  action runs, with typeahead suggestions from a JSONPath on the object or from
+  a related kind via the pack's own edges.
+- `confirmValue` lets a typed confirmation ask for the value at risk — fencing
+  asks for the instance, not the cluster.
+- CNPG: restore to a new cluster with a point-in-time recovery target, scale
+  instances, scale a pooler.
+- CNPG: `WAL` column reading the `ContinuousArchiving` condition, and `NODES`
+  reading `.status.topology.nodesUsed`.
+- CNPG: Databases, Publications, Subscriptions and Image Catalogs — the
+  declarative CRDs from 1.25 on.
+- Demo fixtures for every CNPG kind.
+
+### Changed
+
+- CNPG fence and promote pick an instance from the cluster's own
+  `.status.instanceNames` instead of a free-text box.
+- A lens kind's tenth action is reachable as `0`. CNPG's tenth is Wake, so
+  hibernating was reachable and un-hibernating was not.
+
+### Fixed
+
+- A create action's confirm modal no longer paints its manifest over the panes
+  behind it. The kubectl heredoc is several lines in one string, and the modal
+  neither split it nor reserved rows for it.
+- CNPG Poolers grade against the real `active|paused|inactive|failed` enum. The
+  table named `"Pooler is ready"`, which CNPG never writes, so every healthy
+  PgBouncer rendered amber.
+- A parameter default is rendered as a template, so `"{{.Name}}-restore"` no
+  longer reaches the manifest with its braces intact.
+- A `create` body drops empty fields before it is sent. An unset recovery
+  target used to be written as an empty one, which CNPG must interpret and
+  which leaves the cluster never finishing bootstrap.
 
 ## [v0.5.0] — 2026-09-16
 

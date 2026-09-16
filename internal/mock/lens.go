@@ -215,7 +215,7 @@ func (s *Source) LensActions(kind, ns, name, selected string) []domain.LensActio
 			ID: a.ID, Label: a.Label, Confirm: a.Confirm,
 			Notice: a.Notice, AckPath: a.Ack, ConfirmValue: a.ConfirmValue,
 			Kubectl: lens.Kubectl(a, resourceOf(k), ns, name, v),
-			Params:  demoParamSpecs(a, name),
+			Params:  demoParamSpecs(a, v),
 		}
 		// CheckReady, not Check: an unfilled parameter opens the form, it does
 		// not disable the button.
@@ -234,14 +234,18 @@ func (s *Source) LensActions(kind, ns, name, selected string) []domain.LensActio
 // demoLensOptions — a fixture keyed by kind and parameter. Inventing them from
 // the pack would make the demo claim a cluster shape it cannot show, and
 // leaving them empty would make the form look broken in every screenshot.
-func demoParamSpecs(a lens.Action, name string) []domain.LensParamSpec {
+func demoParamSpecs(a lens.Action, v lens.Vars) []domain.LensParamSpec {
 	if len(a.Params) == 0 {
 		return nil
 	}
+	// Defaults are templates and are rendered here, exactly as the real
+	// backend renders them — otherwise the demo shows "{{.Name}}-restore" in
+	// the field, and every screenshot taken from it shows it too.
+	filled := a.Fill(v).Params
 	out := make([]domain.LensParamSpec, 0, len(a.Params))
 	for _, p := range a.Params {
 		spec := domain.LensParamSpec{
-			Name: p.Name, Label: p.Label, Type: p.Type, Default: p.Default,
+			Name: p.Name, Label: p.Label, Type: p.Type, Default: filled[p.Name],
 			AllowFree: p.AllowFree, Required: p.Required,
 		}
 		if spec.Label == "" {
@@ -251,7 +255,7 @@ func demoParamSpecs(a lens.Action, name string) []domain.LensParamSpec {
 			spec.Options = append(spec.Options, domain.LensOption{Value: o.Value, Note: o.Note})
 		}
 		if p.OptionsFrom != "" {
-			spec.Options = append(spec.Options, demoLensOptions(p.OptionsFrom, name)...)
+			spec.Options = append(spec.Options, demoLensOptions(p.OptionsFrom, v.Name)...)
 		}
 		out = append(out, spec)
 	}

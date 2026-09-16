@@ -361,6 +361,38 @@ func TestLensParamsRelatedSaysWhenTheKindIsNotLoaded(t *testing.T) {
 	}
 }
 
+// A default is a template, and the UI seeds its field from it and shows it
+// immediately. Handed over unrendered, the operator sees "{{.Name}}-restore"
+// in the box they are about to accept — and the manifest carries the braces.
+func TestLensParamsRenderTheDefaultBeforeTheUISeesIt(t *testing.T) {
+	s := lensStoreWithPack(t, `
+name: deflike
+requires: [pl.example.com/v1]
+kinds:
+  - key: pl-clusters
+    gvr: pl.example.com/v1/clusters
+    namespaced: true
+    columns: [{header: NAME, path: .metadata.name}]
+    actions: [pl-clone]
+actions:
+  - id: pl-clone
+    label: Clone
+    verb: create
+    params:
+      - {name: target, label: new name, allowFree: true, default: "{{.Name}}-restore"}
+    template:
+      apiVersion: pl.example.com/v1
+      kind: Cluster
+      metadata: {name: "{{.Params.target}}", namespace: "{{.Namespace}}"}
+`, plGVR, "ClusterList", plCluster("data", "my-db", "my-db-1"))
+	syncStore(t, s, "pl-clusters")
+
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-clone", "target")
+	if p.Default != "my-db-restore" {
+		t.Errorf("default = %q, want it rendered", p.Default)
+	}
+}
+
 // confirmValue names the string a typed confirmation must match. Fencing is
 // about an INSTANCE; asking the operator to type the cluster's name confirms
 // something they were never shown, which is the failure typed-confirm exists

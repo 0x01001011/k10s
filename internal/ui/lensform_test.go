@@ -319,6 +319,32 @@ func TestLensFormCapsALongSuggestionList(t *testing.T) {
 	}
 }
 
+// A create action's preview is an indented JSON manifest. Collapsing the
+// indentation flattens every nested key to the same level, and a reader
+// checking whether targetTime sits UNDER recoveryTarget or beside it then
+// cannot tell — which is the one question the preview is there to answer.
+func TestWrapPreviewKeepsIndentation(t *testing.T) {
+	line := `      "name": "a-very-long-cluster-name-that-will-not-fit-on-one-line-at-all",`
+	got := wrapPreview(line, 40)
+
+	if len(got) < 2 {
+		t.Fatalf("line was not wrapped: %q", got)
+	}
+	for i, seg := range got {
+		if !strings.HasPrefix(seg, "      ") {
+			t.Errorf("segment %d lost its indent: %q", i, seg)
+		}
+		if w := lipgloss.Width(seg); w > 40 {
+			t.Errorf("segment %d is %d wide, want <= 40: %q", i, w, seg)
+		}
+	}
+	// A short line is returned untouched, indent and all.
+	short := `    "kind": "Cluster",`
+	if got := wrapPreview(short, 40); len(got) != 1 || got[0] != short {
+		t.Errorf("short line was altered: %q", got)
+	}
+}
+
 // An action with no parameters must not open a form. The confirm modal it has
 // always used is still the right surface for a yes/no.
 func TestLensFormIsNotOpenedForAParameterlessAction(t *testing.T) {

@@ -163,6 +163,72 @@ actions:
       operation: {sync: {syncStrategy: {apply: {}}}}
 ```
 
+### Parameters
+
+An action may declare `params`: values collected before it runs, each rendered
+as a field in a form with typeahead suggestions. Templates reach them as
+`{{.Params.<name>}}`.
+
+```yaml
+- id: cnpg-fence
+  label: Fence instance
+  verb: annotate
+  confirm: typed
+  confirmValue: "{{.Params.instance}}"
+  params:
+    - name: instance
+      label: instance
+      required: true
+      optionsFrom: .status.instanceNames
+  annotations:
+    cnpg.io/fencedInstances: '["{{.Params.instance}}"]'
+```
+
+| Field | Meaning |
+| --- | --- |
+| `name` | How templates reach it. Must be a legal Go template field — letters, digits and underscores, not starting with a digit. `target-instance` is rejected at parse time, because `{{.Params.target-instance}}` parses as a subtraction. |
+| `label` | What the form calls it. Defaults to `name`. |
+| `type` | `string` (default), `int` or `bool`. Steers validation, not the widget. |
+| `default` | Starting value. Itself a template, so `"{{.Name}}-restore"` works. |
+| `options` | A fixed list of `{value, note}`. |
+| `optionsFrom` | A live source — see below. |
+| `allowFree` | Accept a value outside the list. Off by default. |
+| `required` | Refuse to submit without it. |
+
+`optionsFrom` takes either shape, disambiguated by the leading dot a JSONPath
+always has and a GVR never does:
+
+```yaml
+optionsFrom: .status.instanceNames            # a list, or a map's sorted keys
+optionsFrom: postgresql.cnpg.io/v1/backups    # related objects of that kind
+```
+
+The GVR form resolves through the pack's own `edges`, so "which Backups belong
+to this Cluster" is stated once and read by both the relationship panel and the
+restore form. Suggestions from a related kind arrive newest-first, each noted
+with its phase.
+
+Everything resolves in `internal/k8s` — the UI never parses a JSONPath, and an
+empty list arrives with a note saying whether the kind is unloaded or genuinely
+empty.
+
+**`confirmValue`** names the string a typed confirmation must match. Without it
+the gate asks for the object's own name, which is wrong for the actions that
+most need a gate: fencing acts on an *instance*, so typing the cluster's name
+confirms something the operator was never shown.
+
+A parameterised action is never disabled for being unfilled — an empty field is
+the reason the form opens, not a reason to grey out the button. Validation
+happens on submit.
+
+A `create` body is pruned of empty strings before it is sent, and the preview
+is pruned the same way. An optional parameter nobody filled renders to `""`,
+and sending that is not the same as omitting it: a
+`bootstrap.recovery.recoveryTarget` carrying an empty `targetTime` is a
+recovery target CNPG has to interpret, and the cluster never finishes
+bootstrapping. `annotate` is deliberately *not* pruned — there the empty string
+is how un-fencing removes a key.
+
 ### Selection, notices and preconditions
 
 Three fields exist because the verb alone cannot express what they say.
@@ -375,14 +441,42 @@ silently not executed. The row shows window state so that is not a mystery.
 
 ### cnpg — ship second
 
-`postgresql.cnpg.io/v1`, one served version. The row is
-`readyInstances/instances` + `currentPrimary` + phase severity. Actions are
-one annotation or one status patch each: **fence**
-(`cnpg.io/fencedInstances`, a JSON array string), **hibernate**
-(`cnpg.io/hibernation: on|off`), **restart**
-(`kubectl.kubernetes.io/restartedAt`), **reload** (`cnpg.io/reloadedAt`),
-**backup** (create a `Backup` CR), **promote** (status patch,
-conflict-retry).
+`postgresql.cnpg.io/v1`, one served version. Eight kinds: Clusters, Backups,
+Scheduled Backups, Poolers, and the declarative CRDs from 1.25 on — Databases,
+Publications, Subscriptions, Image Catalogs.
+
+The cluster row is `readyInstances/instances` + `currentPrimary` + phase
+severity, plus two columns that carry what an SRE actually checks:
+
+- **`WAL`** reads the `ContinuousArchiving` condition and grades `False` as an
+  error. This is the failure worth building the column for: when WAL archiving
+  breaks, *nothing else on the row changes* — the cluster keeps reporting
+  `Cluster in healthy state` — while the recovery window stops advancing and
+  `pg_wal` grows until the volume fills. Every backup taken since is a lie.
+- **`NODES`** is `.status.topology.nodesUsed`: distinct nodes hosting
+  instances, which is what `cnpg_collector_nodes_used` measures, without
+  Prometheus. One node under several instances means every replica shares a
+  failure domain with the primary. It is deliberately **ungraded** — severity
+  tables map a value, and whether `1` is bad depends on `INSTANCES`. Grading it
+  would paint every single-instance dev cluster amber forever.
+
+| Action | How |
+| --- | --- |
+| **promote** | status patch (`targetPrimary` + timestamp + phase), conflict-retry, instance from `.status.instanceNames`. Refuses while the cluster carries a fencing annotation — a fenced instance has no Postgres to promote, so the patch would stall in `Switchover in progress`. |
+| **backup** | creates a `Backup` CR with `method` and `target`. `Backup.spec` is immutable after creation, so a wrong method cannot be edited afterwards, only recreated — which is why both are chosen up front. |
+| **restore** | creates a **new** `Cluster` with `bootstrap.recovery`. CNPG never restores in place; the notice says so, because an operator reaching for "restore" on a broken cluster expects that cluster to be repaired. Source backup comes from the pack's own edge to Backups. |
+| **scale** | patches `.spec.instances`. |
+| **fence** | `cnpg.io/fencedInstances`, a JSON array *string*. Instance from `.status.instanceNames`; the typed gate asks for the instance, not the cluster. |
+| **hibernate / wake** | `cnpg.io/hibernation: on\|off`. |
+| **restart** | `kubectl.kubernetes.io/restartedAt` — the Kubernetes namespace, not `cnpg.io`. |
+| **reload** | `cnpg.io/reloadedAt`. |
+| **pooler scale** | patches `.spec.instances` on the Pooler. |
+
+`Pooler.status.phase` is an **enum** — `active`, `paused`, `inactive`, `failed`
+— unlike `Cluster.status.phase`, which is a human sentence. Copying the
+sentence table's shape onto it is how the pack once shipped with
+`ok: ["Pooler is ready"]`, a string CNPG never writes, so every healthy
+PgBouncer graded amber.
 
 This is the only one of the five with a genuine standalone types module —
 `github.com/cloudnative-pg/api` — but the lens mechanism uses unstructured

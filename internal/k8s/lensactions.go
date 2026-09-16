@@ -68,7 +68,7 @@ func (s *Store) LensActions(kind, ns, name, selected string) []domain.LensAction
 			AckPath:      a.Ack,
 			ConfirmValue: a.ConfirmValue,
 			Kubectl:      lens.Kubectl(a, lk.gvr.Resource, ns, name, v),
-			Params:       s.lensParamSpecs(lk, a, obj, ns, name),
+			Params:       s.lensParamSpecs(lk, a, obj, ns, name, v),
 		}
 		// CheckReady, not Check: an unfilled parameter is not a reason to
 		// disable the button, it is the reason the button opens a form.
@@ -85,17 +85,22 @@ func (s *Store) LensActions(kind, ns, name, selected string) []domain.LensAction
 
 // lensParamSpecs turns an action's declared parameters into what the UI draws,
 // resolving every live option source here so the UI never parses a JSONPath.
-func (s *Store) lensParamSpecs(lk *lensKind, a lens.Action, obj *unstructured.Unstructured, ns, name string) []domain.LensParamSpec {
+func (s *Store) lensParamSpecs(lk *lensKind, a lens.Action, obj *unstructured.Unstructured, ns, name string, v lens.Vars) []domain.LensParamSpec {
 	if len(a.Params) == 0 {
 		return nil
 	}
+	// Defaults are templates, so they are rendered HERE rather than handed to
+	// the UI raw. The form seeds each field from its default and shows it
+	// immediately: an unrendered one puts "{{.Name}}-restore" in the box the
+	// operator is about to accept.
+	filled := a.Fill(v).Params
 	out := make([]domain.LensParamSpec, 0, len(a.Params))
 	for _, p := range a.Params {
 		spec := domain.LensParamSpec{
 			Name:      p.Name,
 			Label:     p.Label,
 			Type:      p.Type,
-			Default:   p.Default,
+			Default:   filled[p.Name],
 			AllowFree: p.AllowFree,
 			Required:  p.Required,
 		}
