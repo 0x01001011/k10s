@@ -13,7 +13,26 @@ Cutting one is four steps, in order — see
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Every lens action that needs a value the row cannot supply now collects it in
+  a form: ArgoCD rollback, Kargo promote, approve and re-verify, and Longhorn
+  backup. `requiresSelection` and `{{.Selected}}` are gone.
+- ArgoCD rollback suggests the revisions in `.status.history`, Kargo re-verify
+  the ids in `.status.freightHistory`, and Longhorn backup the volume's own
+  Snapshots.
+- ArgoCD rollback's typed confirmation asks for the revision rather than the
+  Application's name.
+
+### Fixed
+
+- A lens `optionsFrom` path may index or fan out over a list
+  (`.status.history[*].revision`). The walk followed map keys only, so no
+  value living inside an array could be suggested at all.
+- An unfilled parameter renders empty instead of falling back to the object's
+  own name. The old fallback meant an action that forgot to declare
+  `requiresSelection` wrote the cluster's name where an instance belonged —
+  and a misspelled `{{.Params.instnace}}` is now an error, not silence.
 
 ## [v0.6.0] — 2026-09-16
 

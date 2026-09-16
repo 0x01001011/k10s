@@ -125,18 +125,25 @@ actions:
     confirm: "true"            # QUOTED: the field is a string, and an
                                # unquoted true is a YAML bool that fails to
                                # parse and takes the whole pack with it
-    requiresSelection: true     # the value is an instance, not the Cluster
+    params:                     # the value is an instance, not the Cluster
+      - name: instance
+        required: true
+        optionsFrom: .status.instanceNames
     annotations:
-      cnpg.io/fencedInstances: '["{{.Selected}}"]'   # JSON array, quoted
+      cnpg.io/fencedInstances: '["{{.Params.instance}}"]'   # JSON array, quoted
 
   - id: cnpg-promote
     label: Promote to primary
     verb: status-patch
-    confirm: typed              # requires typing the object name
-    requiresSelection: true
+    confirm: typed              # requires typing a value back
+    confirmValue: "{{.Params.instance}}"
+    params:
+      - name: instance
+        required: true
+        optionsFrom: .status.instanceNames
     patch:
       status:
-        targetPrimary: "{{.Selected}}"
+        targetPrimary: "{{.Params.instance}}"
         targetPrimaryTimestamp: "{{.Now}}"
         phase: Switchover in progress
     retryOnConflict: true
@@ -229,22 +236,9 @@ recovery target CNPG has to interpret, and the cluster never finishes
 bootstrapping. `annotate` is deliberately *not* pruned — there the empty string
 is how un-fencing removes a key.
 
-### Selection, notices and preconditions
+### Targets, notices and preconditions
 
 Three fields exist because the verb alone cannot express what they say.
-
-**`requiresSelection`** marks an action whose `.Selected` cannot fall back to
-the row's own name. Most can — fencing instance `my-db` reads the same either
-way — but a CNPG *instance* is a pod called `my-db-2`, a Longhorn backup needs
-a *snapshot* name, a Kargo promotion needs a *Freight* name, and an ArgoCD
-rollback needs a *git revision*. None of those is the row's name, and
-substituting it would target the wrong object or, worse, be silently ignored
-(the Kargo controller drops a re-verify with an empty id, which looks like
-success). The backend reports such an action **disabled with a reason**, and
-the UI turns that one reason into a question — pressing it asks which
-instance, then runs with the answer. The answer is scoped to the row it was
-given for: carrying it to the next row would let the second press skip the
-question entirely and act on an instance belonging to the first.
 
 **`target`** redirects the write to a SIBLING object of a different GVR,
 keeping the selected row's name and namespace. Longhorn attach/detach is the
@@ -252,9 +246,15 @@ whole reason it exists: the state lives on a `VolumeAttachment` CR named
 identically to the `Volume` you are looking at, so "patch a different kind,
 same name" is the mechanism rather than a special case.
 
-An earlier draft of this document used `{{.Name}}` for CNPG fence and promote.
-That was wrong for exactly this reason, and the packs are correct where they
-differ from it.
+An earlier draft of this document used `{{.Name}}` for CNPG fence and promote,
+and an earlier version of the schema let an unfilled value fall back to the
+row's own name. Both were wrong for the same reason: a CNPG *instance* is a pod
+called `my-db-2`, a Longhorn backup needs a *snapshot* name, a Kargo promotion
+needs a *Freight* name, and an ArgoCD rollback needs a *git revision*. None of
+those is the row's name, and substituting it targets the wrong object or, worse,
+is silently ignored — the Kargo controller drops a re-verify carrying an empty
+id, which looks exactly like success. Every one of those values is a `param`
+now, so an unfilled one renders empty and a required one refuses.
 
 **`notice`** is free text the confirm modal prints verbatim. Some warnings are
 facts about the operator rather than about the verb — that syncing an ArgoCD
@@ -278,8 +278,8 @@ serves all of them.
 the equivalent `kubectl` command), and `typed` (must type the object's
 name). Destructive and failover actions use `typed`.
 
-Template variables: `.Name`, `.Namespace`, `.Context`, `.Now` (RFC3339),
-`.Selected` (the highlighted sub-row — a chosen instance or revision).
+Template variables: `.Name`, `.Namespace`, `.Context`, `.Now` (RFC3339) and
+`.Params.<name>` (one of the action's declared parameters).
 
 ## Relationships
 
@@ -328,9 +328,10 @@ typed` requires the object's own name to be typed before Enter or the OK
 button does anything, and is used for writes no controller can undo. Both
 modals end with the equivalent `kubectl` line: it is how an operator checks
 that the button does what they think, and how they reproduce it in a runbook
-afterwards. An action declaring `requiresSelection` **asks** which instance
-to act on instead of refusing — a CNPG instance is `my-db-2`, never the
-cluster's own name, so there is nothing to default to.
+afterwards. An action declaring `params` opens its **form** first and confirms
+from there, because the word to type is often one of the values being chosen —
+fencing acts on an instance, so typing the cluster's name confirms something
+the operator was never shown.
 
 **`R` shows relationships.** One hop, in both directions, in the same text
 panel describe and YAML use. A neighbour whose kind has never been opened is
@@ -510,8 +511,8 @@ it), detach (patch `spec.attachmentTickets` on the `VolumeAttachment` CR via
 
 **Shipped so far:** snapshot, backup, detach, node enable/disable
 scheduling. **Not shipped:** attach and replica-count. Attach needs a
-ticket *id* the UI has no way to obtain — `requiresSelection` would be
-asking the operator to invent one — and changing `spec.numberOfReplicas`
+ticket *id* the UI has no way to obtain — a `param` for it would be asking
+the operator to invent one — and changing `spec.numberOfReplicas`
 triggers a rebuild whose cost the row does not show. Both are honest
 omissions rather than oversights, and neither is listed as an action in
 `longhorn.yaml`.

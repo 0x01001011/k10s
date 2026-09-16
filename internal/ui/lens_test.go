@@ -211,36 +211,39 @@ func TestTypedConfirmBackspaceDisarms(t *testing.T) {
 	}
 }
 
-// An action that needs a sub-row asks for one instead of being unreachable.
-//
-// CNPG has moved to parameters, so the pack under test here is Kargo, whose
-// re-verify still needs a verification id that is not the row's name. The
-// mechanism is still live for argocd, kargo and longhorn and still needs its
-// gate tested.
-func TestActionNeedingASelectionAsksForOne(t *testing.T) {
+// An action that needs a value the row cannot supply opens a FORM, not a
+// free-text question. Kargo's re-verify is the case: the id it writes comes
+// from the Stage's verification history, and an empty one is accepted by the
+// controller and does nothing — the worst failure available, because it looks
+// like it worked.
+func TestActionNeedingAValueOpensAForm(t *testing.T) {
 	m := demoProd(t)
 	selectLensKind(t, m, "kargo-stages")
 
-	var need domain.LensActionSpec
+	var reverify domain.LensActionSpec
 	for _, sp := range m.lensActions() {
-		if sp.Disabled && strings.Contains(sp.DisabledWhy, "selected") {
-			need = sp
-			break
+		if sp.ID == "kargo-reverify" {
+			reverify = sp
 		}
 	}
-	if need.ID == "" {
-		t.Fatal("no shipped action requires a selection; the gate is untested")
+	if reverify.ID == "" {
+		t.Fatal("kargo-reverify missing from the pane")
 	}
-	m.fireLensAction(need)
-	if m.confirm == nil || m.confirm.ask == "" {
-		t.Fatalf("firing %q did not ask what to act on", need.ID)
+	// Never disabled for want of an answer: nothing can fill a form that
+	// never opens.
+	if reverify.Disabled {
+		t.Errorf("reverify is disabled (%q); a parameterised action opens a form instead", reverify.DisabledWhy)
 	}
-	if m.confirm.armed() {
-		t.Error("an unanswered question is armed; Enter would run the action with nothing named")
+
+	m.fireLensAction(reverify)
+	if m.lensForm == nil {
+		t.Fatal("firing reverify did not open a form")
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
-	if !m.confirm.armed() {
-		t.Error("an answered question is still not armed")
+	if m.confirm != nil {
+		t.Error("reverify opened the old confirm modal as well as a form")
+	}
+	if m.lensForm.ready() {
+		t.Error("an empty required field is ready; Enter would write an id of \"\"")
 	}
 }
 
@@ -333,40 +336,6 @@ func TestDemoGradesCellsFromTheShippedPacks(t *testing.T) {
 	for in, want := range cases {
 		if got := level(in[0], in[1]); got != want {
 			t.Errorf("CellLevel(%q, %q) = %q, want %q", in[0], in[1], got, want)
-		}
-	}
-}
-
-// The instance a prompt collected belongs to the row it was collected on.
-//
-// Carrying it further is how you fence the wrong cluster with no prompt:
-// having answered "which instance?" with db-a-2 on cluster db-a, moving to
-// db-b and pressing the same key would pass Check (Selected is non-empty),
-// skip the question, and write db-a's instance onto db-b.
-func TestSelectedInstanceDoesNotLeakToTheNextRow(t *testing.T) {
-	m := demoProd(t)
-	selectLensKind(t, m, "cnpg-clusters")
-
-	rowKey := func() string {
-		return m.curKind().Key + "\x00" + m.curNamespace() + "\x00" + m.curName()
-	}
-	first := rowKey()
-	m.lensSel, m.lensSelKey = "reporting-db-2", first
-	if got := m.selectedFor(first); got != "reporting-db-2" {
-		t.Fatalf("the answering row lost its own selection: %q", got)
-	}
-
-	m.move(1)
-	if second := rowKey(); second == first {
-		t.Fatal("the demo has only one cnpg row; the leak cannot be tested")
-	}
-	if got := m.selectedFor(rowKey()); got != "" {
-		t.Errorf("the next row inherited %q as its instance", got)
-	}
-	// And the action is therefore offered as a question again, not fired.
-	for _, sp := range m.lensActions() {
-		if sp.NeedsSelection && !sp.Disabled {
-			t.Errorf("action %q is enabled on a row that never named an instance", sp.ID)
 		}
 	}
 }

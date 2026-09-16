@@ -104,7 +104,18 @@ actions:
     verb: create
     confirm: "true"
     # spec.freight is a Freight name; the Stage's own name is not one.
-    requiresSelection: true
+    #
+    # No optionsFrom, deliberately. The freight worth promoting is the freight
+    # VERIFIED IN an upstream stage — a field on the Freight objects, keyed by
+    # stage name, not anything the Stage being promoted to carries. The Stage's
+    # own .status.freightHistory holds what it has ALREADY had, which is the
+    # opposite of the list wanted: every entry looks plausible and re-promotes
+    # what is already deployed.
+    params:
+      - name: freight
+        label: freight
+        required: true
+        allowFree: true
     template:
       apiVersion: kargo.akuity.io/v1alpha1
       kind: Promotion
@@ -113,7 +124,7 @@ actions:
         namespace: "{{.Namespace}}"
       spec:
         stage: "{{.Name}}"
-        freight: "{{.Selected}}"
+        freight: "{{.Params.freight}}"
 
   # Approval is a status write on the freights/status subresource, not an
   # annotation. The webhook still emits the FreightApproved event.
@@ -124,11 +135,19 @@ actions:
     retryOnConflict: true
     # The map key is the Stage to approve for; the Freight's own name is not
     # a Stage name.
-    requiresSelection: true
+    #
+    # No optionsFrom: approving exists to let Freight SKIP the pipeline, so the
+    # stages worth offering are precisely the ones absent from .status.verifiedIn
+    # — a list of what is not there, which no path can express.
+    params:
+      - name: stage
+        label: stage
+        required: true
+        allowFree: true
     patch:
       status:
         approvedFor:
-          "{{.Selected}}":
+          "{{.Params.stage}}":
             approvedAt: "{{.Now}}"
 
   # The controller echoes what we wrote into .status.lastHandledRefresh,
@@ -154,12 +173,17 @@ actions:
     label: Re-run verification
     verb: annotate
     confirm: "true"
-    # The id comes from .status.freightHistory[0].verificationHistory[0].id,
+    # The id comes from .status.freightHistory[].verificationHistory[].id,
     # never the Stage's name. An empty id is silently ignored by the
     # controller, which is the worst possible failure: it looks like it worked.
-    requiresSelection: true
+    # So the ids are listed, current freight first, and one must be chosen.
+    params:
+      - name: id
+        label: verification
+        required: true
+        optionsFrom: .status.freightHistory[*].verificationHistory[*].id
     annotations:
-      kargo.akuity.io/reverify: '{"id":"{{.Selected}}"}'
+      kargo.akuity.io/reverify: '{"id":"{{.Params.id}}"}'
 
 edges:
   - from: kargo.akuity.io/v1alpha1/promotions

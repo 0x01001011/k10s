@@ -117,13 +117,24 @@ actions:
           - name: k10s
             value: "synced from k10s at {{.Now}}"
 
-  # Rollback is sync with a revision taken from .status.history[], so it needs
-  # a real sub-row: the volume's own name is not a git revision.
+  # Rollback is sync with a revision taken from .status.history[], which is
+  # exactly what `argocd app history` prints — so the form offers it too. A
+  # git SHA is the one value nobody recalls from memory.
   - id: argocd-rollback
     label: Roll back to revision
     verb: patch
     confirm: typed
-    requiresSelection: true
+    # Type the revision, not the Application's name: the name is on screen
+    # already, so confirming it confirms nothing about where this lands.
+    confirmValue: "{{.Params.revision}}"
+    params:
+      - name: revision
+        label: revision
+        required: true
+        optionsFrom: .status.history[*].revision
+        # revisionHistoryLimit caps the history at 10 by default, so an older
+        # revision is still a legal answer — just not a suggestible one.
+        allowFree: true
     notice: >-
       Rolling back writes .operation with a historical revision. The same
       argocd-rbac-cm bypass applies as for a normal sync.
@@ -138,7 +149,7 @@ actions:
           username: k10s
           automated: false
         sync:
-          revision: "{{.Selected}}"
+          revision: "{{.Params.revision}}"
           syncStrategy:
             apply: {}
 

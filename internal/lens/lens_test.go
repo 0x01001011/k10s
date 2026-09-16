@@ -325,54 +325,6 @@ func TestBuiltinPacksAreDiscoveryGated(t *testing.T) {
 	}
 }
 
-// An action that templates .Selected must say so, unless the row's own name
-// is genuinely a valid value. Nothing else catches the case where .Selected
-// silently falls back to the wrong string: a CNPG instance is "my-db-2", not
-// "my-db", and fencing the wrong name looks like it worked.
-func TestActionsTemplatingSelectedAreMarked(t *testing.T) {
-	packs, _ := Builtins()
-	for _, p := range packs {
-		for _, a := range p.Actions {
-			if !mentionsSelected(a) || a.RequiresSelection {
-				continue
-			}
-			t.Errorf("lens %q action %q templates {{.Selected}} but is not marked requiresSelection — "+
-				"if the row's own name really is a valid value here, say so in a comment and mark it anyway",
-				p.Name, a.ID)
-		}
-	}
-}
-
-func mentionsSelected(a Action) bool {
-	found := false
-	walk := func(s string) {
-		if strings.Contains(s, ".Selected") {
-			found = true
-		}
-	}
-	for _, v := range a.Annotations {
-		walk(v)
-	}
-	var tree func(any)
-	tree = func(n any) {
-		switch v := n.(type) {
-		case string:
-			walk(v)
-		case map[string]any:
-			for _, e := range v {
-				tree(e)
-			}
-		case []any:
-			for _, e := range v {
-				tree(e)
-			}
-		}
-	}
-	tree(a.Patch)
-	tree(a.Template)
-	return found
-}
-
 // The ArgoCD RBAC bypass must reach the modal as DATA. Keyed on a Go constant
 // it would be a test asserting a string equals itself; as a YAML comment the
 // parser discards it entirely.

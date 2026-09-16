@@ -51,10 +51,13 @@ actions:
     verb: status-patch
     confirm: typed
     retryOnConflict: true
-    requiresSelection: true
+    params:
+      - name: instance
+        required: true
+        optionsFrom: .status.instanceNames
     patch:
       status:
-        targetPrimary: "{{.Selected}}"
+        targetPrimary: "{{.Params.instance}}"
         phase: Switchover in progress
   - id: cl-unfence
     label: Unfence
@@ -192,7 +195,7 @@ func TestLensVerbPatchUsesMergePatch(t *testing.T) {
 		app("default", "my-app", "OutOfSync", "Healthy"))
 	syncStore(t, s, "argocd-apps")
 
-	if _, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", "", nil); err != nil {
+	if _, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", nil); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))
@@ -223,7 +226,8 @@ func TestLensVerbStatusPatchTargetsTheStatusSubresource(t *testing.T) {
 	s := lensStoreWithPack(t, cnpgLikePack, cnpgGVR, "ClusterList", cnpgCluster("data", "my-db"))
 	syncStore(t, s, "cl-clusters")
 
-	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", "my-db-2", nil); err != nil {
+	params := map[string]string{"instance": "my-db-2"}
+	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", params); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))
@@ -277,7 +281,7 @@ func TestLensActionRefusesWhenAPreconditionHolds(t *testing.T) {
 	s := newTestStoreWithLenses(t, []string{"argoproj.io/v1alpha1"}, obj)
 	syncStore(t, s, "argocd-apps")
 
-	_, err := s.LensAction("argocd-apps", "default", "busy-app", "argocd-sync", "", nil)
+	_, err := s.LensAction("argocd-apps", "default", "busy-app", "argocd-sync", nil)
 	if err == nil {
 		t.Fatal("sync must be refused while .operation is set")
 	}
@@ -298,7 +302,7 @@ func TestLensActionsReportsDisabledWithAReason(t *testing.T) {
 	syncStore(t, s, "argocd-apps")
 
 	var sync domain.LensActionSpec
-	for _, sp := range s.LensActions("argocd-apps", "default", "busy-app", "") {
+	for _, sp := range s.LensActions("argocd-apps", "default", "busy-app") {
 		if sp.ID == "argocd-sync" {
 			sync = sp
 		}
@@ -311,30 +315,33 @@ func TestLensActionsReportsDisabledWithAReason(t *testing.T) {
 	}
 }
 
-// An action needing a real sub-row must be disabled rather than fired against
-// the row's own name — promoting "my-db" instead of "my-db-2" targets nothing.
-func TestLensActionsDisablesWhatNeedsASelection(t *testing.T) {
+// An action needing a value the row cannot supply is OFFERED — it opens a
+// form — but refuses to run without one. Disabling it instead would make it
+// permanently unreachable, since nothing can fill a form that never opens;
+// running it against the row's own name would promote "my-db" instead of
+// "my-db-2" and target nothing.
+func TestLensActionNeedingAParamIsOfferedButRefusesEmpty(t *testing.T) {
 	s := lensStoreWithPack(t, cnpgLikePack, cnpgGVR, "ClusterList", cnpgCluster("data", "my-db"))
 	syncStore(t, s, "cl-clusters")
 
 	found := false
-	for _, sp := range s.LensActions("cl-clusters", "data", "my-db", "") {
+	for _, sp := range s.LensActions("cl-clusters", "data", "my-db") {
 		if sp.ID != "cl-promote" {
 			continue
 		}
 		found = true
-		if !sp.Disabled {
-			t.Error("promote must be disabled when no instance is selected")
+		if sp.Disabled {
+			t.Errorf("promote is disabled (%q); it should open a form", sp.DisabledWhy)
 		}
-		if !strings.Contains(sp.DisabledWhy, "selected") {
-			t.Errorf("reason should name the missing selection: %q", sp.DisabledWhy)
+		if len(sp.Params) != 1 || sp.Params[0].Name != "instance" {
+			t.Errorf("promote params = %+v, want one named instance", sp.Params)
 		}
 	}
 	if !found {
 		t.Fatal("cl-promote missing from the pane")
 	}
-	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", "", nil); err == nil {
-		t.Error("firing it anyway must be refused")
+	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", nil); err == nil {
+		t.Error("firing it with nothing chosen must be refused")
 	}
 }
 
@@ -344,7 +351,7 @@ func TestLensActionsCarriesTheKubectlLineAndNotice(t *testing.T) {
 		app("default", "my-app", "OutOfSync", "Healthy"))
 	syncStore(t, s, "argocd-apps")
 
-	for _, sp := range s.LensActions("argocd-apps", "default", "my-app", "") {
+	for _, sp := range s.LensActions("argocd-apps", "default", "my-app") {
 		if sp.ID != "argocd-sync" {
 			continue
 		}
@@ -371,7 +378,7 @@ func TestLensActionSurfacesServerErrorVerbatim(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "applications"}, "my-app", errString(msg))
 	})
 
-	_, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", "", nil)
+	_, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", nil)
 	if err == nil {
 		t.Fatal("want the forbidden error")
 	}
@@ -385,7 +392,7 @@ func TestLensVerbAnnotate(t *testing.T) {
 	s := lensStoreWithPack(t, cnpgLikePack, cnpgGVR, "ClusterList", cnpgCluster("data", "my-db"))
 	syncStore(t, s, "cl-clusters")
 
-	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-unfence", "", nil); err != nil {
+	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-unfence", nil); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))
@@ -459,7 +466,7 @@ func TestLensActionReturnsTheAckToken(t *testing.T) {
 	s := lensStoreWithPack(t, ackPack, ackGVR, "ThingList", ackThing("default", "t1", ""))
 	syncStore(t, s, "ack-things")
 
-	got, err := s.LensAction("ack-things", "default", "t1", "ack-poke", "", nil)
+	got, err := s.LensAction("ack-things", "default", "t1", "ack-poke", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +478,7 @@ func TestLensActionReturnsTheAckToken(t *testing.T) {
 	}
 
 	// An action with no ack declared has no token to wait on.
-	if got, err := s.LensAction("ack-things", "default", "t1", "ack-plain", "", nil); err != nil || got != "" {
+	if got, err := s.LensAction("ack-things", "default", "t1", "ack-plain", nil); err != nil || got != "" {
 		t.Errorf("ack-plain returned %q, %v — want an empty token", got, err)
 	}
 }
@@ -529,7 +536,7 @@ actions:
 	}, vol, va)
 	syncStore(t, s, "tg-volumes")
 
-	if _, err := s.LensAction("tg-volumes", "storage", "pvc-abc", "tg-detach", "", nil); err != nil {
+	if _, err := s.LensAction("tg-volumes", "storage", "pvc-abc", "tg-detach", nil); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))

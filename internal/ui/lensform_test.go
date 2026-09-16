@@ -61,17 +61,17 @@ type previewSource struct {
 	domain.Source
 }
 
-func (previewSource) LensActions(kind, ns, name, selected string) []domain.LensActionSpec {
+func (previewSource) LensActions(kind, ns, name string) []domain.LensActionSpec {
 	return nil
 }
 
-func (previewSource) LensAction(kind, ns, name, id, selected string, params map[string]string) (string, error) {
+func (previewSource) LensAction(kind, ns, name, id string, params map[string]string) (string, error) {
 	return "", nil
 }
 
 func (previewSource) LensAck(kind, ns, name, id, want string) (bool, error) { return true, nil }
 
-func (previewSource) LensPreview(kind, ns, name, id, selected string, params map[string]string) string {
+func (previewSource) LensPreview(kind, ns, name, id string, params map[string]string) string {
 	keys := make([]string, 0, len(params))
 	for k := range params {
 		keys = append(keys, k)

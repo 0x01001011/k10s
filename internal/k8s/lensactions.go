@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,7 +24,7 @@ import (
 const lensActionTimeout = 15 * time.Second
 
 // lensVars builds the template values for one object.
-func (s *Store) lensVars(ns, name, selected string, params map[string]string) lens.Vars {
+func (s *Store) lensVars(ns, name string, params map[string]string) lens.Vars {
 	ctxName := ""
 	if s.c != nil {
 		ctxName = s.c.CurrentContext
@@ -34,7 +34,6 @@ func (s *Store) lensVars(ns, name, selected string, params map[string]string) le
 		Namespace: ns,
 		Context:   ctxName,
 		Now:       time.Now().UTC().Format(time.RFC3339),
-		Selected:  selected,
 		Params:    params,
 	}
 }
@@ -44,12 +43,12 @@ func (s *Store) lensVars(ns, name, selected string, params map[string]string) le
 // An action the user cannot currently run is returned DISABLED with a reason
 // rather than omitted: a button that vanishes is a mystery, and one that fires
 // against the wrong object is worse.
-func (s *Store) LensActions(kind, ns, name, selected string) []domain.LensActionSpec {
+func (s *Store) LensActions(kind, ns, name string) []domain.LensActionSpec {
 	lk, ok := s.lensKindFor(kind)
 	if !ok {
 		return nil
 	}
-	v := s.lensVars(ns, name, selected, nil)
+	v := s.lensVars(ns, name, nil)
 	// Read the object ONCE for the whole pane rather than per parameter: the
 	// pane is rebuilt whenever the selection moves, and every action on a
 	// CNPG cluster sources its instance list from the same object.
@@ -70,12 +69,12 @@ func (s *Store) LensActions(kind, ns, name, selected string) []domain.LensAction
 			Kubectl:      lens.Kubectl(a, lk.gvr.Resource, ns, name, v),
 			Params:       s.lensParamSpecs(lk, a, obj, ns, name, v),
 		}
-		// CheckReady, not Check: an unfilled parameter is not a reason to
-		// disable the button, it is the reason the button opens a form.
-		if err := a.CheckReady(v); err != nil {
-			spec.Disabled, spec.DisabledWhy = true, err.Error()
-			spec.NeedsSelection = errors.Is(err, lens.ErrSelectedRequired)
-		} else if why := s.lensRefusal(lk, a, ns, name); why != "" {
+		// Check is deliberately NOT called here. An unfilled parameter is not
+		// a reason to grey out the button, it is the reason the button opens a
+		// form — disabling on it would make every parameterised action
+		// permanently unreachable, since nothing can fill a form that never
+		// opens.
+		if why := s.lensRefusal(lk, a, ns, name); why != "" {
 			spec.Disabled, spec.DisabledWhy = true, why
 		}
 		out = append(out, spec)
@@ -164,47 +163,109 @@ func lensOptionNote(obj map[string]any, value string) string {
 }
 
 // lensPathList resolves a path to a list of strings: the elements of an array,
-// or the SORTED keys of a map.
+// the SORTED keys of a map, or one field of every entry an index or a [*]
+// fans out to.
 //
 // Sorted, because a map's iteration order is random per frame — an option list
 // that reshuffles while the operator reads it is one they cannot trust enough
 // to arrow through.
+//
+// [*] is not a luxury. The values worth suggesting are rarely a bare list on
+// the object: an ArgoCD revision is a field of each .status.history entry and
+// a Kargo verification id is two arrays deep, so a walk that only follows map
+// keys can offer suggestions for neither.
 func lensPathList(obj map[string]any, path string) []string {
 	// Walked by hand rather than through client-go's jsonpath, which renders
 	// to text: a list would arrive as "[a b c]" and a map as its Go syntax,
 	// and splitting that back apart would break on any value with a space.
-	// Option sources are plain field paths, so the walk is the simpler tool.
-	cur := any(obj)
+	frontier := []any{any(obj)}
 	for _, seg := range strings.Split(strings.Trim(path, "{}."), ".") {
-		m, ok := cur.(map[string]any)
+		name, idx, ok := splitIndex(seg)
 		if !ok {
 			return nil
 		}
-		cur, ok = m[seg]
-		if !ok {
-			return nil
-		}
-	}
-	switch v := cur.(type) {
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, e := range v {
-			if s, ok := e.(string); ok {
-				out = append(out, s)
+		next := make([]any, 0, len(frontier))
+		for _, cur := range frontier {
+			m, ok := cur.(map[string]any)
+			if !ok {
+				continue
+			}
+			if v, ok := m[name]; ok {
+				next = append(next, v)
 			}
 		}
-		return out
-	case []string:
-		return append([]string(nil), v...)
-	case map[string]any:
-		out := make([]string, 0, len(v))
-		for k := range v {
-			out = append(out, k)
+		frontier = next
+		if idx == pathNoIndex {
+			continue
 		}
-		sort.Strings(out)
-		return out
+		fanned := make([]any, 0, len(frontier))
+		for _, cur := range frontier {
+			list, ok := cur.([]any)
+			if !ok {
+				continue
+			}
+			if idx == pathAllIndexes {
+				fanned = append(fanned, list...)
+			} else if idx < len(list) {
+				fanned = append(fanned, list[idx])
+			}
+		}
+		frontier = fanned
 	}
-	return nil
+
+	out := make([]string, 0, len(frontier))
+	for _, cur := range frontier {
+		switch v := cur.(type) {
+		case string:
+			out = append(out, v)
+		case []any:
+			for _, e := range v {
+				if s, ok := e.(string); ok {
+					out = append(out, s)
+				}
+			}
+		case []string:
+			out = append(out, v...)
+		case map[string]any:
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			out = append(out, keys...)
+		}
+	}
+	return out
+}
+
+// Index sentinels for splitIndex. A real index is >= 0.
+const (
+	pathNoIndex    = -1
+	pathAllIndexes = -2
+)
+
+// splitIndex separates "history[*]" into its field name and its subscript.
+// The bool is false for a subscript this walk cannot honour — a jsonpath
+// filter expression, say — because returning nothing is the honest answer
+// where guessing would offer the operator a list that is not the one asked
+// for.
+func splitIndex(seg string) (string, int, bool) {
+	open := strings.IndexByte(seg, '[')
+	if open < 0 {
+		return seg, pathNoIndex, true
+	}
+	if !strings.HasSuffix(seg, "]") {
+		return "", 0, false
+	}
+	sub := seg[open+1 : len(seg)-1]
+	if sub == "*" {
+		return seg[:open], pathAllIndexes, true
+	}
+	n, err := strconv.Atoi(sub)
+	if err != nil || n < 0 {
+		return "", 0, false
+	}
+	return seg[:open], n, true
 }
 
 // lensRelatedOptions lists the names of related objects of one kind, reusing
@@ -359,7 +420,7 @@ func lensPathHasValue(obj map[string]any, path string) bool {
 // Server errors are returned VERBATIM. Kargo's promote rejection arrives as a
 // webhook message naming the virtual `promote` verb, and wrapping it in
 // "lens: %v" would bury the one sentence that says what permission is missing.
-func (s *Store) LensAction(kind, ns, name, id, selected string, params map[string]string) (string, error) {
+func (s *Store) LensAction(kind, ns, name, id string, params map[string]string) (string, error) {
 	lk, ok := s.lensKindFor(kind)
 	if !ok {
 		return "", fmt.Errorf("unknown kind %q", kind)
@@ -370,7 +431,7 @@ func (s *Store) LensAction(kind, ns, name, id, selected string, params map[strin
 	}
 	// Fill BEFORE Check, so a parameter the operator left alone is judged on
 	// its default rather than reported as missing.
-	v := a.Fill(s.lensVars(ns, name, selected, params))
+	v := a.Fill(s.lensVars(ns, name, params))
 	if err := a.Check(v); err != nil {
 		return "", err
 	}
@@ -453,7 +514,7 @@ func (s *Store) LensAction(kind, ns, name, id, selected string, params map[strin
 // Separate from the Kubectl string on LensActionSpec, which is computed once
 // per selection: this one changes on every keystroke, and a preview that lags
 // the form describes a mutation other than the one about to happen.
-func (s *Store) LensPreview(kind, ns, name, id, selected string, params map[string]string) string {
+func (s *Store) LensPreview(kind, ns, name, id string, params map[string]string) string {
 	lk, ok := s.lensKindFor(kind)
 	if !ok {
 		return ""
@@ -462,7 +523,7 @@ func (s *Store) LensPreview(kind, ns, name, id, selected string, params map[stri
 	if !ok {
 		return ""
 	}
-	return lens.Kubectl(a, lk.gvr.Resource, ns, name, s.lensVars(ns, name, selected, params))
+	return lens.Kubectl(a, lk.gvr.Resource, ns, name, s.lensVars(ns, name, params))
 }
 
 // ackWant is the value the controller is expected to echo into the ack field.

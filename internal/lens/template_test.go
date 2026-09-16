@@ -1,7 +1,6 @@
 package lens
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -11,17 +10,17 @@ var testVars = Vars{
 	Namespace: "data",
 	Context:   "prod",
 	Now:       "2026-09-14T10:00:00Z",
-	Selected:  "my-db-2",
+	Params:    map[string]string{"instance": "my-db-2"},
 }
 
 func TestRenderVars(t *testing.T) {
 	cases := map[string]string{
-		"{{.Name}}":         "my-db",
-		"{{.Namespace}}":    "data",
-		"{{.Context}}":      "prod",
-		"{{.Now}}":          "2026-09-14T10:00:00Z",
-		"{{.Selected}}":     "my-db-2",
-		`["{{.Selected}}"]`: `["my-db-2"]`,
+		"{{.Name}}":                "my-db",
+		"{{.Namespace}}":           "data",
+		"{{.Context}}":             "prod",
+		"{{.Now}}":                 "2026-09-14T10:00:00Z",
+		"{{.Params.instance}}":     "my-db-2",
+		`["{{.Params.instance}}"]`: `["my-db-2"]`,
 	}
 	for in, want := range cases {
 		got, err := Render(in, testVars)
@@ -46,27 +45,46 @@ func TestRenderRejectsAnUnknownVariable(t *testing.T) {
 	}
 }
 
-// Selected defaults to Name. Most actions target the row itself, and the ones
-// for which that is wrong declare requiresSelection.
-func TestSelectedDefaultsToName(t *testing.T) {
-	got, err := Render("{{.Selected}}", Vars{Name: "my-app"})
+// A parameter nobody filled renders EMPTY, not the row's own name. That
+// fallback is what the single .Selected slot did, and it is why an action
+// that forgot to opt out wrote the cluster's name where an instance belonged
+// — fencing nothing, on the wrong object, looking like it worked.
+func TestAnUnfilledParamDoesNotFallBackToTheName(t *testing.T) {
+	a := Action{Params: []Param{{Name: "instance"}}}
+	got, err := Render("{{.Params.instance}}", a.Fill(Vars{Name: "my-app"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "my-app" {
-		t.Errorf("Selected = %q, want it to fall back to Name", got)
+	if got != "" {
+		t.Errorf("unfilled param = %q, want empty", got)
 	}
 }
 
-func TestCheckRefusesWhenSelectionIsRequired(t *testing.T) {
-	a := Action{ID: "x", Verb: VerbCreate, RequiresSelection: true, Template: map[string]any{"a": "b"}}
-	if err := a.Check(Vars{Name: "my-vol"}); !errors.Is(err, ErrSelectedRequired) {
-		t.Errorf("Check with nothing selected = %v, want ErrSelectedRequired", err)
+// A template naming a parameter the action never declared is an ERROR, not an
+// empty string. missingkey=error is what makes that true, and it is the same
+// guarantee .Name and .Namespace already had: a typo must not reach a cluster
+// annotation as silence.
+func TestAnUndeclaredParamIsAnError(t *testing.T) {
+	a := Action{Params: []Param{{Name: "instance"}}}
+	if _, err := Render("{{.Params.instanace}}", a.Fill(Vars{Name: "my-app"})); err == nil {
+		t.Error("a misspelled parameter rendered without error")
 	}
-	if err := a.Check(Vars{Name: "my-vol", Selected: "snap-1"}); err != nil {
-		t.Errorf("Check with a selection = %v, want nil", err)
+}
+
+func TestCheckRefusesWhenARequiredParamIsEmpty(t *testing.T) {
+	a := Action{
+		ID: "x", Verb: VerbCreate,
+		Params:   []Param{{Name: "snapshot", Label: "snapshot", Required: true, AllowFree: true}},
+		Template: map[string]any{"a": "{{.Params.snapshot}}"},
 	}
-	// An action that does NOT require a selection is never refused.
+	if err := a.Check(a.Fill(Vars{Name: "my-vol"})); err == nil {
+		t.Error("Check with nothing filled in = nil, want a refusal")
+	}
+	filled := Vars{Name: "my-vol", Params: map[string]string{"snapshot": "snap-1"}}
+	if err := a.Check(a.Fill(filled)); err != nil {
+		t.Errorf("Check with the param filled = %v, want nil", err)
+	}
+	// An action that asks for nothing is never refused.
 	b := Action{ID: "y", Verb: VerbAnnotate, Annotations: map[string]string{"k": "v"}}
 	if err := b.Check(Vars{Name: "my-vol"}); err != nil {
 		t.Errorf("Check on an ordinary action = %v, want nil", err)
@@ -79,7 +97,7 @@ func TestRenderTreeLeavesNonStrings(t *testing.T) {
 		"num":   float64(3),
 		"bool":  true,
 		"list":  []any{"{{.Namespace}}", float64(7)},
-		"inner": map[string]any{"deep": "{{.Selected}}"},
+		"inner": map[string]any{"deep": "{{.Params.instance}}"},
 	}
 	out, err := RenderTree(in, testVars)
 	if err != nil {
@@ -107,10 +125,10 @@ func TestRenderTreeLeavesNonStrings(t *testing.T) {
 	}
 }
 
-// Kargo's approvedFor is keyed by the Stage name, which comes from .Selected —
+// Kargo's approvedFor is keyed by the Stage name, which comes from a param —
 // so map KEYS must expand, not just values.
 func TestRenderTreeExpandsMapKeys(t *testing.T) {
-	in := map[string]any{"approvedFor": map[string]any{"{{.Selected}}": map[string]any{"approvedAt": "{{.Now}}"}}}
+	in := map[string]any{"approvedFor": map[string]any{"{{.Params.instance}}": map[string]any{"approvedAt": "{{.Now}}"}}}
 	out, err := RenderTree(in, testVars)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +160,7 @@ func TestKubectlEquivalent(t *testing.T) {
 		},
 		{
 			name:   "status-patch",
-			action: Action{Verb: VerbStatusPatch, Patch: map[string]any{"status": map[string]any{"targetPrimary": "{{.Selected}}"}}},
+			action: Action{Verb: VerbStatusPatch, Patch: map[string]any{"status": map[string]any{"targetPrimary": "{{.Params.instance}}"}}},
 			want:   []string{"--subresource status", "--type merge", `"targetPrimary":"my-db-2"`},
 		},
 		{
@@ -245,7 +263,7 @@ func TestKubectlRendersForEveryShippedAction(t *testing.T) {
 	packs, _ := Builtins()
 	for _, p := range packs {
 		for _, a := range p.Actions {
-			v := Vars{Name: "obj", Namespace: "ns", Context: "ctx", Now: "2026-09-14T10:00:00Z", Selected: "sel"}
+			v := Vars{Name: "obj", Namespace: "ns", Context: "ctx", Now: "2026-09-14T10:00:00Z"}
 			got := Kubectl(a, "things", "ns", "obj", v)
 			if got == "" {
 				t.Errorf("lens %q action %q renders no kubectl line", p.Name, a.ID)
