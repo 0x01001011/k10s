@@ -115,7 +115,7 @@ func TestLensParamsResolveAListFromTheObject(t *testing.T) {
 		plCluster("data", "my-db", "my-db-1", "my-db-2", "my-db-3"))
 	syncStore(t, s, "pl-clusters")
 
-	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-fence", "instance")
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db"), "pl-fence", "instance")
 	if got := strings.Join(optionValues(p), ","); got != "my-db-1,my-db-2,my-db-3" {
 		t.Errorf("instance options = %q, want the cluster's three instances", got)
 	}
@@ -132,7 +132,7 @@ func TestLensParamsResolveAMapsKeysInOrder(t *testing.T) {
 		plCluster("data", "my-db", "my-db-2", "my-db-1"))
 	syncStore(t, s, "pl-clusters")
 
-	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-fence", "role")
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db"), "pl-fence", "role")
 	if got := strings.Join(optionValues(p), ","); got != "my-db-1,my-db-2" {
 		t.Errorf("role options = %q, want the map's keys in sorted order", got)
 	}
@@ -148,7 +148,7 @@ func TestLensParamsTolerateAMissingPath(t *testing.T) {
 	s := lensStoreWithPack(t, paramLikePack, plGVR, "ClusterList", obj)
 	syncStore(t, s, "pl-clusters")
 
-	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-fence", "instance")
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db"), "pl-fence", "instance")
 	if len(p.Options) != 0 {
 		t.Errorf("options = %+v, want none", p.Options)
 	}
@@ -160,7 +160,7 @@ func TestLensParamsCarryAFixedListAndItsDefault(t *testing.T) {
 	s := lensStoreWithPack(t, paramLikePack, plGVR, "ClusterList", plCluster("data", "my-db", "my-db-1"))
 	syncStore(t, s, "pl-clusters")
 
-	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-backup", "method")
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db"), "pl-backup", "method")
 	if got := strings.Join(optionValues(p), ","); got != "barmanObjectStore,volumeSnapshot" {
 		t.Errorf("method options = %q", got)
 	}
@@ -176,7 +176,7 @@ func TestLensActionWritesTheChosenParameter(t *testing.T) {
 		plCluster("data", "my-db", "my-db-1", "my-db-2"))
 	syncStore(t, s, "pl-clusters")
 
-	if _, err := s.LensAction("pl-clusters", "data", "my-db", "pl-fence", "",
+	if _, err := s.LensAction("pl-clusters", "data", "my-db", "pl-fence",
 		map[string]string{"instance": "my-db-2"}); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestLensActionRefusesAnEmptyRequiredParameter(t *testing.T) {
 		plCluster("data", "my-db", "my-db-1"))
 	syncStore(t, s, "pl-clusters")
 
-	_, err := s.LensAction("pl-clusters", "data", "my-db", "pl-fence", "", nil)
+	_, err := s.LensAction("pl-clusters", "data", "my-db", "pl-fence", nil)
 	if err == nil {
 		t.Fatal("firing with no instance must be refused")
 	}
@@ -222,13 +222,13 @@ func TestLensPreviewReflectsTheCurrentParameters(t *testing.T) {
 		plCluster("data", "my-db", "my-db-1", "my-db-2"))
 	syncStore(t, s, "pl-clusters")
 
-	got := s.LensPreview("pl-clusters", "data", "my-db", "pl-fence", "",
+	got := s.LensPreview("pl-clusters", "data", "my-db", "pl-fence",
 		map[string]string{"instance": "my-db-2"})
 	if !strings.Contains(got, `["my-db-2"]`) {
 		t.Errorf("preview = %q, want the chosen instance", got)
 	}
 
-	got = s.LensPreview("pl-clusters", "data", "my-db", "pl-backup", "",
+	got = s.LensPreview("pl-clusters", "data", "my-db", "pl-backup",
 		map[string]string{"method": "volumeSnapshot"})
 	if !strings.Contains(got, "volumeSnapshot") {
 		t.Errorf("preview = %q, want the chosen method", got)
@@ -321,7 +321,7 @@ func TestLensParamsRelatedListsTheRelatedObjects(t *testing.T) {
 	syncStore(t, s, "pl-clusters")
 	syncStore(t, s, "pl-backups")
 
-	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-restore", "source")
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db"), "pl-restore", "source")
 	got := strings.Join(optionValues(p), ",")
 	if strings.Contains(got, "other-daily-1") {
 		t.Errorf("options = %q, must not offer another cluster's backup", got)
@@ -352,7 +352,7 @@ func TestLensParamsRelatedSaysWhenTheKindIsNotLoaded(t *testing.T) {
 	)
 	syncStore(t, s, "pl-clusters") // deliberately NOT pl-backups
 
-	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-restore", "source")
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db"), "pl-restore", "source")
 	if len(p.Options) != 0 {
 		t.Fatalf("options = %+v, want none from an unopened kind", p.Options)
 	}
@@ -387,7 +387,7 @@ actions:
 `, plGVR, "ClusterList", plCluster("data", "my-db", "my-db-1"))
 	syncStore(t, s, "pl-clusters")
 
-	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-clone", "target")
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db"), "pl-clone", "target")
 	if p.Default != "my-db-restore" {
 		t.Errorf("default = %q, want it rendered", p.Default)
 	}
@@ -402,7 +402,7 @@ func TestLensActionsCarryTheConfirmValue(t *testing.T) {
 		plCluster("data", "my-db", "my-db-1", "my-db-2"))
 	syncStore(t, s, "pl-clusters")
 
-	for _, sp := range s.LensActions("pl-clusters", "data", "my-db", "") {
+	for _, sp := range s.LensActions("pl-clusters", "data", "my-db") {
 		if sp.ID != "pl-fence" {
 			continue
 		}

@@ -176,7 +176,7 @@ func (m *Model) refreshLensPreview() {
 	if !ok {
 		return
 	}
-	cmd := lv.LensPreview(st.kind, st.ns, st.name, st.sp.ID, "", st.params())
+	cmd := lv.LensPreview(st.kind, st.ns, st.name, st.sp.ID, st.params())
 	st.preview = nil
 	if cmd != "" {
 		st.preview = strings.Split(cmd, "\n")

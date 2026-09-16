@@ -1,7 +1,6 @@
 package mock
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -194,16 +193,16 @@ func (s *Source) CellLevel(kind, column, value string) string {
 	return ""
 }
 
-// LensActions lists the demo's verbs, gated exactly as the real backend
-// gates them — including refusing the ones that need an instance named.
-func (s *Source) LensActions(kind, ns, name, selected string) []domain.LensActionSpec {
+// LensActions lists the demo's verbs, with the same parameters and
+// suggestions the real backend would offer.
+func (s *Source) LensActions(kind, ns, name string) []domain.LensActionSpec {
 	p, k, ok := lensKindOf(kind)
 	if !ok {
 		return nil
 	}
 	v := lens.Vars{
 		Name: name, Namespace: ns, Context: contexts[s.ctxIdx],
-		Now: time.Now().UTC().Format(time.RFC3339), Selected: selected,
+		Now: time.Now().UTC().Format(time.RFC3339),
 	}
 	var out []domain.LensActionSpec
 	for _, id := range k.Actions {
@@ -216,12 +215,6 @@ func (s *Source) LensActions(kind, ns, name, selected string) []domain.LensActio
 			Notice: a.Notice, AckPath: a.Ack, ConfirmValue: a.ConfirmValue,
 			Kubectl: lens.Kubectl(a, resourceOf(k), ns, name, v),
 			Params:  demoParamSpecs(a, v),
-		}
-		// CheckReady, not Check: an unfilled parameter opens the form, it does
-		// not disable the button.
-		if err := a.CheckReady(v); err != nil {
-			spec.Disabled, spec.DisabledWhy = true, err.Error()
-			spec.NeedsSelection = errors.Is(err, lens.ErrSelectedRequired)
 		}
 		out = append(out, spec)
 	}
@@ -275,6 +268,24 @@ func demoLensOptions(source, name string) []domain.LensOption {
 			{Value: name + "-2", Note: "replica"},
 			{Value: name + "-3", Note: "replica"},
 		}
+	case ".status.history[*].revision":
+		// Newest last, as ArgoCD appends it — so the demo shows the ordering
+		// an operator actually has to read past, not a tidied one.
+		return []domain.LensOption{
+			{Value: "a3f91c2", Note: "deployed 18d ago"},
+			{Value: "c81a05f", Note: "deployed 4d ago"},
+			{Value: "7b2e4d8", Note: "deployed 2h ago"},
+		}
+	case ".status.freightHistory[*].verificationHistory[*].id":
+		return []domain.LensOption{
+			{Value: "01JR4K2Q7F", Note: "Failed"},
+			{Value: "01JQ8Z0M3C", Note: "Successful"},
+		}
+	case "longhorn.io/v1beta2/snapshots":
+		return []domain.LensOption{
+			{Value: name + "-snap-2", Note: "ready"},
+			{Value: name + "-snap-1", Note: "ready"},
+		}
 	}
 	return nil
 }
@@ -288,7 +299,7 @@ func resourceOf(k lens.Kind) string {
 
 // LensAction pretends to write, and hands back a token so the demo shows
 // the same acknowledgement wait a real controller produces.
-func (s *Source) LensAction(kind, ns, name, id, selected string, params map[string]string) (string, error) {
+func (s *Source) LensAction(kind, ns, name, id string, params map[string]string) (string, error) {
 	p, _, ok := lensKindOf(kind)
 	if !ok {
 		return "", fmt.Errorf("unknown kind %q", kind)
@@ -302,7 +313,7 @@ func (s *Source) LensAction(kind, ns, name, id, selected string, params map[stri
 	// about the gate.
 	v := a.Fill(lens.Vars{
 		Name: name, Namespace: ns, Context: contexts[s.ctxIdx],
-		Now: time.Now().UTC().Format(time.RFC3339), Selected: selected, Params: params,
+		Now: time.Now().UTC().Format(time.RFC3339), Params: params,
 	})
 	if err := a.Check(v); err != nil {
 		return "", err
@@ -323,7 +334,7 @@ func (s *Source) LensAction(kind, ns, name, id, selected string, params map[stri
 }
 
 // LensPreview renders the command for the parameters currently in the form.
-func (s *Source) LensPreview(kind, ns, name, id, selected string, params map[string]string) string {
+func (s *Source) LensPreview(kind, ns, name, id string, params map[string]string) string {
 	p, k, ok := lensKindOf(kind)
 	if !ok {
 		return ""
@@ -334,7 +345,7 @@ func (s *Source) LensPreview(kind, ns, name, id, selected string, params map[str
 	}
 	return lens.Kubectl(a, resourceOf(k), ns, name, lens.Vars{
 		Name: name, Namespace: ns, Context: contexts[s.ctxIdx],
-		Now: time.Now().UTC().Format(time.RFC3339), Selected: selected, Params: params,
+		Now: time.Now().UTC().Format(time.RFC3339), Params: params,
 	})
 }
 

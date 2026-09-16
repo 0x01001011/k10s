@@ -210,13 +210,6 @@ type Model struct {
 	// keystroke, while the selection changes far less often.
 	lensSpecs []domain.LensActionSpec
 	lensKey   string
-	// The instance a lens action was aimed at (a CNPG pod, an ArgoCD
-	// revision), and the outstanding wait for a controller to acknowledge.
-	lensSel string
-	// lensSelKey is the row the instance was named for. Without it the
-	// answer leaks onto the next row, which is how you fence the wrong
-	// cluster with no prompt.
-	lensSelKey string
 	// lensForm is the open parameter form, or nil. It captures the keyboard
 	// ahead of the confirm modal, because a form that is filling in a field
 	// owns every letter that arrives.

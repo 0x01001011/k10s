@@ -133,8 +133,13 @@ actions:
     verb: create
     confirm: "true"
     # spec.snapshotName must be an existing SNAPSHOT, never the volume's own
-    # name, so .Selected cannot fall back to it.
-    requiresSelection: true
+    # name. The snapshots-to-volume edge below already states which snapshots
+    # belong to this volume, so the form reads that rather than restating it.
+    params:
+      - name: snapshotName
+        label: snapshot
+        required: true
+        optionsFrom: longhorn.io/v1beta2/snapshots
     template:
       apiVersion: longhorn.io/v1beta2
       kind: Backup
@@ -144,7 +149,7 @@ actions:
         labels:
           longhorn.io/backup-volume: "{{.Name}}"
       spec:
-        snapshotName: "{{.Selected}}"
+        snapshotName: "{{.Params.snapshotName}}"
 
   # The VolumeAttachment CR is named identically to the Volume, so this is
   # a patch on a different kind with the same name — that is what target is

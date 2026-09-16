@@ -2,7 +2,6 @@ package lens
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -16,29 +15,13 @@ type Vars struct {
 	Namespace string
 	Context   string
 	Now       string // RFC3339
-	// Selected is the highlighted sub-row: an instance, a revision, a
-	// snapshot. It defaults to Name, because for most actions the row's own
-	// name is exactly the right target.
-	Selected string
 	// Params are the action's collected parameters, reached in templates as
 	// {{.Params.<name>}}. Always non-nil after Action.Fill.
 	Params map[string]string
 }
 
-// ErrSelectedRequired means the action declares requiresSelection but nothing
-// was selected. It exists so an action that needs a real sub-row refuses
-// rather than silently targeting the wrong object — fencing CNPG instance ""
-// or re-verifying Kargo with an empty id both look like success and do
-// nothing at all.
-var ErrSelectedRequired = errors.New("this action needs a selected instance, and nothing is selected")
-
-// resolve fills in the defaults. Selected falls back to Name: for most
-// actions the row's own name is the right target, and an action for which
-// that is NOT true says so with requiresSelection.
+// resolve fills in the defaults.
 func (v Vars) resolve() Vars {
-	if v.Selected == "" {
-		v.Selected = v.Name
-	}
 	// missingkey=error fires on a nil map too, so an action with no params
 	// would otherwise fail to render the moment any template mentioned
 	// .Params at all.
@@ -106,7 +89,7 @@ func RenderTree(node any, v Vars) (any, error) {
 		out := make(map[string]any, len(n))
 		for k, val := range n {
 			// Keys are templated too: Kargo's approvedFor is keyed by the
-			// Stage name, which comes from .Selected.
+			// Stage name, which comes from {{.Params.stage}}.
 			key, err := Render(k, v)
 			if err != nil {
 				return nil, err
@@ -131,19 +114,6 @@ func RenderTree(node any, v Vars) (any, error) {
 	default:
 		return node, nil
 	}
-}
-
-// CheckReady reports why an action cannot even be OFFERED, or nil.
-//
-// It is deliberately narrower than Check: an unfilled parameter is not a
-// reason to grey out the button, it is the reason the button opens a form.
-// Disabling on it would make every parameterised action permanently
-// unreachable, since nothing can fill a form that never opens.
-func (a Action) CheckReady(v Vars) error {
-	if a.RequiresSelection && v.Selected == "" {
-		return ErrSelectedRequired
-	}
-	return nil
 }
 
 // Prune drops empty-string leaves from a rendered create body, and then any
@@ -201,9 +171,6 @@ func Prune(node any) any {
 // nothing to ask, and a pack edited to add a required param must not turn that
 // into a write with an empty value.
 func (a Action) Check(v Vars) error {
-	if err := a.CheckReady(v); err != nil {
-		return err
-	}
 	for _, p := range a.Params {
 		val := v.Params[p.Name]
 		if val == "" {

@@ -157,8 +157,10 @@ type Option struct {
 
 // Param is one value an action asks for before it runs.
 //
-// It replaces the single-slot RequiresSelection/.Selected pair for actions
-// that need more than one answer: backing up wants a method AND a target,
+// It replaced the single .Selected slot, which could carry one answer, had no
+// name, no suggestions and no validation, and silently fell back to the row's
+// own name — so an action that forgot to opt out wrote the cluster's name
+// where an instance belonged. Backing up wants a method AND a target;
 // restoring wants a name AND a source AND a recovery point. One slot cannot
 // express those, and a bespoke field per action would be a mechanism per
 // action.
@@ -195,7 +197,7 @@ const (
 )
 
 // Action is one declarative mutation. Templates may use .Name, .Namespace,
-// .Context, .Now (RFC3339), .Selected and .Params.
+// .Context, .Now (RFC3339) and .Params.
 type Action struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
@@ -240,14 +242,6 @@ type Action struct {
 	// discards, or as a Go constant keyed on an action id — a string
 	// asserting it equals itself.
 	Notice string `json:"notice"`
-
-	// RequiresSelection marks an action whose .Selected genuinely cannot
-	// fall back to the object's own name. Most can: fencing CNPG instance
-	// "my-db" is the same string either way. Backing up a Longhorn volume
-	// needs a *snapshot* name, and re-verifying a Kargo stage needs a
-	// verification id — neither is the row's name, and writing one anyway
-	// would target the wrong object.
-	RequiresSelection bool `json:"requiresSelection"`
 
 	// RefuseWhen blocks the action when any listed path is present and
 	// non-empty on the object. The controller-side rules that make an

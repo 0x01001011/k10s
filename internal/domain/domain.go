@@ -260,14 +260,6 @@ type LensActionSpec struct {
 	// silently target the wrong object.
 	Disabled    bool
 	DisabledWhy string
-	// NeedsSelection distinguishes the ONE disabled reason the UI can do
-	// something about — "name an instance and I will run" — from every other
-	// reason, which is a refusal. Sniffing DisabledWhy for a word would tie
-	// the two together through pack-authored free text: a `refuseWhen`
-	// reason mentioning "the selected revision" would open an input box
-	// instead of refusing.
-	NeedsSelection bool
-
 	// Params are the values to collect before running, with their suggestions
 	// ALREADY resolved against the cluster. The UI never evaluates a JSONPath
 	// or touches a lister; it draws what it is given.
@@ -304,14 +296,14 @@ type LensParamSpec struct {
 // LensVerbs runs a lens pack's declarative actions. A backend that does not
 // implement it simply shows no lens buttons.
 type LensVerbs interface {
-	LensActions(kind, ns, name, selected string) []LensActionSpec
+	LensActions(kind, ns, name string) []LensActionSpec
 	// LensAction runs the verb and returns the value the controller is
 	// expected to echo back, or "" when the action declares no
 	// acknowledgement. The caller holds it and hands it to LensAck.
 	//
 	// params carries the form's answers. A nil map is the normal case for an
 	// action that asks nothing.
-	LensAction(kind, ns, name, id, selected string, params map[string]string) (ack string, err error)
+	LensAction(kind, ns, name, id string, params map[string]string) (ack string, err error)
 	// LensPreview renders the equivalent kubectl command for the parameters
 	// currently in the form.
 	//
@@ -319,7 +311,7 @@ type LensVerbs interface {
 	// one is computed once per selection, while this changes on every
 	// keystroke — and a preview that lags the form describes a mutation other
 	// than the one about to happen.
-	LensPreview(kind, ns, name, id, selected string, params map[string]string) string
+	LensPreview(kind, ns, name, id string, params map[string]string) string
 	// LensAck reports whether the controller has acknowledged the write.
 	//
 	// want is what LensAction returned. Comparing against it is the whole

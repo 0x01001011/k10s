@@ -106,9 +106,6 @@ func TestCnpgInstanceActionsOfferTheClustersInstances(t *testing.T) {
 		if !p.Required {
 			t.Errorf("%s: instance must be required — an empty one targets nothing", id)
 		}
-		if a.RequiresSelection {
-			t.Errorf("%s still uses requiresSelection; params replaced it", id)
-		}
 		// The word typed to confirm has to be the instance, not the cluster:
 		// typing the cluster's name confirms something never shown.
 		if a.ConfirmValue != "{{.Params.instance}}" {

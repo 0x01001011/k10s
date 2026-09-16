@@ -68,31 +68,13 @@ func (m *Model) lensActions() []domain.LensActionSpec {
 	if name == "" || name == "-" {
 		return nil
 	}
-	row := kind + "\x00" + ns + "\x00" + name
-	sel := m.selectedFor(row)
-	key := row + "\x00" + sel
+	key := kind + "\x00" + ns + "\x00" + name
 	if key == m.lensKey {
 		return m.lensSpecs
 	}
 	m.lensKey = key
-	m.lensSpecs = lv.LensActions(kind, ns, name, sel)
+	m.lensSpecs = lv.LensActions(kind, ns, name)
 	return m.lensSpecs
-}
-
-// selectedFor returns the instance the operator named, but ONLY for the row
-// they named it on.
-//
-// Carrying it further is the dangerous case: having answered "which
-// instance?" with db-a-2 while fencing cluster db-a, moving to db-b and
-// pressing the same key would pass Check (Selected is non-empty), skip the
-// prompt entirely, and annotate db-b with an instance that belongs to db-a
-// — fencing nothing, on the wrong cluster, silently. The selection is scoped
-// to its row for exactly that reason.
-func (m *Model) selectedFor(row string) string {
-	if m.lensSelKey != row {
-		return ""
-	}
-	return m.lensSel
 }
 
 // lensKeyFor is the digit that fires the nth lens action. Digits are used
@@ -128,36 +110,12 @@ func (m *Model) fireLensKey(key string) (tea.Cmd, bool) {
 }
 
 // fireLensAction runs one verb, stopping at whatever gate it declares:
-// disabled outright, a question to answer, a confirmation, a word to type.
+// disabled outright, a form to fill, a confirmation, a word to type.
 func (m *Model) fireLensAction(sp domain.LensActionSpec) tea.Cmd {
 	kind, ns, name := m.curKind().Key, m.curNamespace(), m.curName()
 	short := m.curKind().Short
 
-	// An action that needs an instance asks for one rather than refusing.
-	// This is the only reason these verbs would otherwise be unreachable:
-	// a CNPG instance is "my-db-2", never the cluster's own name, so there
-	// is nothing sensible to default to.
-	if sp.Disabled && sp.NeedsSelection {
-		row := kind + "\x00" + ns + "\x00" + name
-		m.confirm = &confirmState{
-			title:   sp.Label,
-			ask:     "which instance?",
-			message: []string{sp.Label, short + "/" + name, "namespace: " + ns},
-			onOK: func(mm *Model) tea.Cmd {
-				mm.lensSel, mm.lensSelKey = mm.confirmAnswer, row
-				mm.lensKey = "" // the answer changes what the backend returns
-				for _, s2 := range mm.lensActions() {
-					if s2.ID == sp.ID {
-						return mm.fireLensAction(s2)
-					}
-				}
-				return nil
-			},
-		}
-		return nil
-	}
-
-	// Every other disabled action still says why. The reason is the useful
+	// A disabled action still says why. The reason is the useful
 	// half — "ArgoCD is already syncing" is an answer, a silent no-op is not.
 	if sp.Disabled && sp.DisabledWhy != "" {
 		m.toast = "✗ " + sp.DisabledWhy
@@ -246,13 +204,12 @@ func (m *Model) runLensAction(kind, ns, name, short string, sp domain.LensAction
 	if !ok {
 		return nil
 	}
-	sel := m.selectedFor(kind + "\x00" + ns + "\x00" + name)
 	label := sp.Label + " " + short + "/" + name
 	m.lensSeq++
 	seq := m.lensSeq
 	m.startBusy(label)
 	return func() tea.Msg {
-		ack, err := lv.LensAction(kind, ns, name, sp.ID, sel, params)
+		ack, err := lv.LensAction(kind, ns, name, sp.ID, params)
 		return lensDoneMsg{
 			kind: kind, ns: ns, name: name,
 			id: sp.ID, label: label, seq: seq,
