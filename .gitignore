@@ -16,3 +16,6 @@ coverage.html
 /review-receipts
 
 .DS_Store
+
+# Agent planning scratch. Session-local, not repo content.
+/tasks
