@@ -275,6 +275,25 @@ func TestCnpgRestoreCreatesANewCluster(t *testing.T) {
 	}
 }
 
+// Every pack action on a kind has to be reachable from the keyboard. The pane
+// numbers them 1..9 then 0, so a kind carrying more than ten verbs would hide
+// the last ones — and the ones at the end are the undo half of the pairs at
+// the start: unfence after fence, wake after hibernate.
+func TestCnpgKindsStayWithinTheReachableActionKeys(t *testing.T) {
+	p := cnpgPack(t)
+	for _, k := range p.Kinds {
+		n := 0
+		for _, id := range k.Actions {
+			if _, ok := p.Action(id); ok {
+				n++
+			}
+		}
+		if n > 10 {
+			t.Errorf("kind %q declares %d pack actions; only ten get a key", k.Key, n)
+		}
+	}
+}
+
 // The cluster table is the one place the sentence form is correct: CNPG writes
 // a human sentence into Cluster.status.phase, and exactly one of them is good.
 func TestCnpgClusterSeverityGradesOnlyTheHealthySentence(t *testing.T) {

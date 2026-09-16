@@ -52,9 +52,47 @@ var demoLensRows = map[string][][]string{
 		{"finance", "finance", "", "31d"},
 		{"data", "data", "", "31d"},
 	},
+	// Three clusters, each carrying one of the failures the new columns exist
+	// to surface — a failover in progress, a broken WAL archive, and a
+	// three-instance cluster sitting on a single node.
+	//
+	// The WAL one is the case worth staring at: orders-db reports "Cluster in
+	// healthy state" with every instance ready, and its archive is dead. That
+	// is exactly how it looks in production, and exactly why the column is
+	// there.
 	"cnpg-clusters": {
-		{"reporting-db", "2", "3", "reporting-db-2", "Failing over", "9", "21d"},
-		{"orders-db", "3", "3", "orders-db-1", "Cluster in healthy state", "4", "63d"},
+		{"orders-db", "3", "3", "orders-db-1", "Cluster in healthy state", "False", "3", "4", "63d"},
+		{"reporting-db", "2", "3", "reporting-db-2", "Failing over", "True", "3", "9", "21d"},
+		{"billing-db", "3", "3", "billing-db-1", "Cluster in healthy state", "True", "1", "2", "12d"},
+	},
+	"cnpg-backups": {
+		{"orders-db-k10s-8f21", "orders-db", "walArchivingFailing", "barmanObjectStore", "2h", "unexpected failure invoking barman-cloud-wal-archive: exit status 2"},
+		{"reporting-db-daily-9c02", "reporting-db", "running", "volumeSnapshot", "", ""},
+		{"orders-db-daily-7b31", "orders-db", "completed", "barmanObjectStore", "26h", ""},
+		{"billing-db-daily-2e40", "billing-db", "completed", "barmanObjectStore", "4h", ""},
+	},
+	"cnpg-scheduledbackups": {
+		{"reporting-db-nightly", "reporting-db", "0 0 2 * * *", "true", "31h", "cannot schedule while the cluster is failing over"},
+		{"orders-db-nightly", "orders-db", "0 0 1 * * *", "false", "26h", ""},
+		{"billing-db-nightly", "billing-db", "0 0 3 * * *", "false", "4h", ""},
+	},
+	"cnpg-poolers": {
+		{"orders-rw", "orders-db", "rw", "2", "failed", "63d"},
+		{"billing-ro", "billing-db", "ro", "3", "paused", "12d"},
+		{"orders-ro", "orders-db", "ro", "2", "active", "63d"},
+	},
+	"cnpg-databases": {
+		{"orders-app", "orders-db", "orders", "app", "false", `pq: permission denied to create database`, "63d"},
+		{"billing-app", "billing-db", "billing", "app", "true", "", "12d"},
+	},
+	"cnpg-publications": {
+		{"orders-outbox", "orders-db", "orders", "true", "", "40d"},
+	},
+	"cnpg-subscriptions": {
+		{"billing-from-orders", "billing-db", "billing", "orders-outbox", "false", `could not connect to the publisher: timeout expired`, "40d"},
+	},
+	"cnpg-imagecatalogs": {
+		{"postgres-supported", "17 18", "3", "90d"},
 	},
 	"lh-volumes": {
 		{"pvc-b73e19da", "attached", "degraded", "200Gi", "ip-10-0-3-17", "search-index", "search-0", "v1", "12d"},

@@ -350,8 +350,13 @@ func (m *Model) overlayLensForm(root Block) Block {
 
 	if len(st.preview) > 0 {
 		body = append(body, "")
+		// Wrapped, not truncated. The preview exists to be read and checked
+		// against; a command ending in an ellipsis hides the half that says
+		// which instance it names.
 		for _, ln := range st.preview {
-			body = append(body, paint(th.Bg, th.Subtle, false, "  "+trunc(ln, textW)))
+			for _, seg := range wrapNotice(ln, textW) {
+				body = append(body, paint(th.Bg, th.Subtle, false, "  "+seg))
+			}
 		}
 	}
 
@@ -412,9 +417,15 @@ func (m *Model) lensFormField(i int, f lensFormField, textW int) []string {
 		value, valCol = "—", th.Subtle
 	}
 
+	// Padded, not just truncated: trunc only shortens, so a short label left
+	// the value butted straight against it ("instancepostgres").
+	const labelW = 14
+	label = trunc(label, labelW)
+	label += spaces(maxi(1, labelW-lipgloss.Width(label)))
+
 	out := []string{
-		paint(th.Bg, labelCol, focused, marker+trunc(label, 14)) +
-			paint(th.Bg, valCol, false, trunc(value, textW-16)),
+		paint(th.Bg, labelCol, focused, marker+label) +
+			paint(th.Bg, valCol, false, trunc(value, textW-labelW-3)),
 	}
 	if !focused {
 		return out

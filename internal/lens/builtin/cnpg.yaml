@@ -70,9 +70,17 @@ kinds:
       - header: WAL
         path: '.status.conditions[?(@.type=="ContinuousArchiving")].status'
         severity: condition
-      # Distinct nodes hosting instances. 1 with several instances means every
-      # replica shares a failure domain with the primary — the HA is decorative.
-      # This is what cnpg_collector_nodes_used measures, without Prometheus.
+      # Distinct nodes hosting instances. 1 alongside several instances means
+      # every replica shares a failure domain with the primary — the HA is
+      # decorative. This is what cnpg_collector_nodes_used measures, without
+      # Prometheus.
+      #
+      # Deliberately UNGRADED. The severity tables map a value, and whether 1
+      # is bad depends on a second cell: a single-instance cluster on one node
+      # is correct, a three-instance cluster on one node is not. Grading "1"
+      # warn would paint every dev cluster amber forever — the same mistake
+      # this pack just fixed in pooler-phase. Comparing it to INSTANCES is the
+      # reader's job until the schema can express a comparison.
       - {header: NODES, path: .status.topology.nodesUsed, format: int}
       - {header: TIMELINE, path: .status.timelineID, format: int}
       - {header: AGE, path: .metadata.creationTimestamp, format: age}

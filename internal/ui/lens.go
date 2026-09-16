@@ -99,8 +99,15 @@ func (m *Model) selectedFor(row string) string {
 // because every letter worth having is already an action or a plugin
 // shortcut, and because "2" reads as "the second one in the list" without
 // anybody having to learn a mnemonic.
+// The tenth is "0", continuing the row of digits rather than stopping at nine.
+// CNPG has exactly ten verbs, and the tenth is Wake — so a nine-key limit made
+// hibernating a cluster reachable and un-hibernating it not, which is a trap
+// rather than a limitation.
 func lensKeyFor(i int) string {
-	if i > 8 {
+	switch {
+	case i == 9:
+		return "0"
+	case i > 9:
 		return ""
 	}
 	return strconv.Itoa(i + 1)
