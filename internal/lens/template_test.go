@@ -173,6 +173,62 @@ func TestKubectlEquivalent(t *testing.T) {
 	}
 }
 
+// The preview exists to be checked against, so it has to show the values the
+// operator actually chose. A command rendered from defaults while the request
+// carries their edits describes a different mutation from the one about to
+// happen — which is the one thing the preview must never do.
+func TestKubectlRendersParameterValues(t *testing.T) {
+	fence := Action{
+		Verb:   VerbAnnotate,
+		Params: []Param{{Name: "instance", Required: true}},
+		Annotations: map[string]string{
+			"cnpg.io/fencedInstances": `["{{.Params.instance}}"]`,
+		},
+	}
+	got := Kubectl(fence, "clusters", "data", "my-db", Vars{
+		Name: "my-db", Params: map[string]string{"instance": "my-db-2"},
+	})
+	if !strings.Contains(got, `cnpg.io/fencedInstances=["my-db-2"]`) {
+		t.Errorf("Kubectl = %q, want the chosen instance", got)
+	}
+
+	backup := Action{
+		Verb: VerbCreate,
+		Params: []Param{
+			{Name: "method", Default: "barmanObjectStore"},
+			{Name: "target"},
+		},
+		Template: map[string]any{
+			"kind": "Backup",
+			"spec": map[string]any{"method": "{{.Params.method}}"},
+		},
+	}
+	got = Kubectl(backup, "backups", "data", "my-db", Vars{Name: "my-db"})
+	// An untouched parameter renders its DEFAULT, not an empty string: the
+	// preview would otherwise show a manifest the server never receives.
+	if !strings.Contains(got, `"method": "barmanObjectStore"`) {
+		t.Errorf("Kubectl = %q, want the declared default", got)
+	}
+	if strings.Contains(got, "<no value>") || strings.Contains(got, "{{") {
+		t.Errorf("Kubectl leaked a template: %q", got)
+	}
+}
+
+// A required parameter nobody has filled renders empty rather than exploding.
+// The preview is shown WHILE the form is being filled, so half-filled is its
+// normal state; Check is what refuses to send it.
+func TestKubectlToleratesAnUnfilledParameter(t *testing.T) {
+	a := Action{
+		Verb:        VerbAnnotate,
+		Params:      []Param{{Name: "instance", Required: true}},
+		Annotations: map[string]string{"cnpg.io/fencedInstances": `["{{.Params.instance}}"]`},
+	}
+	got := Kubectl(a, "clusters", "data", "my-db", Vars{Name: "my-db"})
+	if strings.Contains(got, "<no value>") || strings.Contains(got, "{{") {
+		t.Errorf("Kubectl leaked a template for an unfilled param: %q", got)
+	}
+}
+
 // A cluster-scoped kind has no namespace, so the command must not claim one.
 func TestKubectlOmitsNamespaceWhenClusterScoped(t *testing.T) {
 	a := Action{Verb: VerbPatch, Patch: map[string]any{"spec": map[string]any{"x": "y"}}}

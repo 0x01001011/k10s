@@ -170,7 +170,12 @@ func (p Param) label() string {
 // a correctness property rather than a nicety — the rendered command must
 // describe the same mutation the request performs.
 func Kubectl(a Action, resource, ns, name string, v Vars) string {
-	v = v.resolve()
+	// Fill, not just resolve: an untouched parameter has to render its
+	// DEFAULT, because that is the value the request will carry. Rendering it
+	// empty would show a manifest the server never receives, and leaving the
+	// key absent would fail the template outright — mid-form, which is the
+	// preview's normal state, not an error.
+	v = a.Fill(v).resolve()
 	target := resource
 	if a.Target != "" {
 		if _, _, r, err := ParseGVR(a.Target); err == nil {
