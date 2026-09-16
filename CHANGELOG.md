@@ -13,6 +13,12 @@ Cutting one is four steps, in order — see
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [v0.6.0] — 2026-09-16
+
+[Release notes](docs/releases/v0.6.0.md)
+
 ### Added
 
 - Log viewer parses structured lines: JSON and logfmt records render as
@@ -232,7 +238,8 @@ sections above it record work that shipped inside it.
 - Seven themes with live preview via `/theme`.
 - `ctrl+s` copy mode, which releases the mouse to the terminal.
 
-[Unreleased]: https://github.com/0x01001011/k10s/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/0x01001011/k10s/compare/v0.6.0...HEAD
+[v0.6.0]: https://github.com/0x01001011/k10s/compare/v0.5.0...v0.6.0
 [v0.5.0]: https://github.com/0x01001011/k10s/compare/v0.3.0...v0.5.0
 [v0.3.0]: https://github.com/0x01001011/k10s/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/0x01001011/k10s/releases/tag/v0.2.0
