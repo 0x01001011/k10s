@@ -68,7 +68,7 @@ func (s *Store) LensActions(kind, ns, name, selected string) []domain.LensAction
 			AckPath:      a.Ack,
 			ConfirmValue: a.ConfirmValue,
 			Kubectl:      lens.Kubectl(a, lk.gvr.Resource, ns, name, v),
-			Params:       s.lensParamSpecs(lk, a, obj, ns),
+			Params:       s.lensParamSpecs(lk, a, obj, ns, name),
 		}
 		// CheckReady, not Check: an unfilled parameter is not a reason to
 		// disable the button, it is the reason the button opens a form.
@@ -85,7 +85,7 @@ func (s *Store) LensActions(kind, ns, name, selected string) []domain.LensAction
 
 // lensParamSpecs turns an action's declared parameters into what the UI draws,
 // resolving every live option source here so the UI never parses a JSONPath.
-func (s *Store) lensParamSpecs(lk *lensKind, a lens.Action, obj *unstructured.Unstructured, ns string) []domain.LensParamSpec {
+func (s *Store) lensParamSpecs(lk *lensKind, a lens.Action, obj *unstructured.Unstructured, ns, name string) []domain.LensParamSpec {
 	if len(a.Params) == 0 {
 		return nil
 	}
@@ -106,7 +106,7 @@ func (s *Store) lensParamSpecs(lk *lensKind, a lens.Action, obj *unstructured.Un
 			spec.Options = append(spec.Options, domain.LensOption{Value: o.Value, Note: o.Note})
 		}
 		if p.OptionsFrom != "" {
-			opts, note := s.lensOptions(lk, p, obj, ns)
+			opts, note := s.lensOptions(lk, p, obj, ns, name)
 			spec.Options = append(spec.Options, opts...)
 			spec.OptionsNote = note
 		}
@@ -118,9 +118,9 @@ func (s *Store) lensParamSpecs(lk *lensKind, a lens.Action, obj *unstructured.Un
 // lensOptions resolves one live option source. The note is the explanation for
 // an empty list, which is never nothing: "no instances" and "that kind has not
 // been opened" send the operator to different places.
-func (s *Store) lensOptions(lk *lensKind, p lens.Param, obj *unstructured.Unstructured, ns string) ([]domain.LensOption, string) {
+func (s *Store) lensOptions(lk *lensKind, p lens.Param, obj *unstructured.Unstructured, ns, name string) ([]domain.LensOption, string) {
 	if !strings.HasPrefix(p.OptionsFrom, ".") && !strings.HasPrefix(p.OptionsFrom, "{") {
-		return s.lensRelatedOptions(lk, p, ns)
+		return s.lensRelatedOptions(lk, p, ns, name)
 	}
 	if obj == nil {
 		return nil, "this object is not loaded, so its values cannot be listed"
@@ -204,9 +204,74 @@ func lensPathList(obj map[string]any, path string) []string {
 
 // lensRelatedOptions lists the names of related objects of one kind, reusing
 // the pack's declared edges rather than a query language of its own: "which
-// Backups belong to this Cluster" is already stated in the pack.
-func (s *Store) lensRelatedOptions(lk *lensKind, p lens.Param, ns string) ([]domain.LensOption, string) {
-	return nil, "listing related objects is not wired up yet"
+// Backups belong to this Cluster" is already stated in the pack, and Related
+// already walks it.
+func (s *Store) lensRelatedOptions(lk *lensKind, p lens.Param, ns, name string) ([]domain.LensOption, string) {
+	want, known := s.kindKeyForGVR(p.OptionsFrom)
+	if !known {
+		return nil, "no view is declared for " + p.OptionsFrom
+	}
+	refs, err := s.Related(lk.kind.Key, ns, name)
+	if err != nil {
+		return nil, err.Error()
+	}
+	var (
+		out      []domain.LensOption
+		unloaded bool
+	)
+	for _, r := range refs {
+		if r.Kind != want {
+			continue
+		}
+		if !r.Loaded {
+			// Related reports an unopened kind as one unnamed, unloaded ref.
+			unloaded = true
+			continue
+		}
+		out = append(out, domain.LensOption{
+			Value: r.Name,
+			Note:  s.lensRelatedNote(want, r.Namespace, r.Name),
+		})
+	}
+	if len(out) == 0 {
+		if unloaded {
+			return nil, "open " + want + " to list them"
+		}
+		return nil, ""
+	}
+	// Newest first. A restore form whose first suggestion is the oldest backup
+	// invites picking it, and the most recent recoverable point is almost
+	// always the one wanted.
+	sort.Slice(out, func(i, j int) bool {
+		return s.lensCreated(want, ns, out[i].Value).After(s.lensCreated(want, ns, out[j].Value))
+	})
+	return out, ""
+}
+
+// lensRelatedNote describes one suggestion: its phase, which for a Backup is
+// the difference between a restore that works and one that cannot.
+func (s *Store) lensRelatedNote(kind, ns, name string) string {
+	obj, _ := s.cachedObjectByName(kind, ns, name)
+	if obj == nil {
+		return ""
+	}
+	phase, _, _ := unstructured.NestedString(obj, "status", "phase")
+	return phase
+}
+
+// lensCreated is one object's creation time, or the zero time when it cannot
+// be read — which sorts it last, where an object nobody can describe belongs.
+func (s *Store) lensCreated(kind, ns, name string) time.Time {
+	obj, _ := s.cachedObjectByName(kind, ns, name)
+	if obj == nil {
+		return time.Time{}
+	}
+	ts, _, _ := unstructured.NestedString(obj, "metadata", "creationTimestamp")
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // lensRefusal evaluates the action's declared preconditions against the cached

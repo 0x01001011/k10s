@@ -235,6 +235,132 @@ func TestLensPreviewReflectsTheCurrentParameters(t *testing.T) {
 	}
 }
 
+// relatedParamPack is the restore shape: a parameter whose suggestions are the
+// names of RELATED objects of another kind, not fields of this one.
+const relatedParamPack = `
+name: relatedlike
+requires: [pl.example.com/v1]
+severities:
+  bphase:
+    ok: [completed]
+    error: [failed]
+    default: warn
+kinds:
+  - key: pl-clusters
+    name: Clusters
+    short: plc
+    group: PLike
+    gvr: pl.example.com/v1/clusters
+    namespaced: true
+    columns: [{header: NAME, path: .metadata.name}]
+    actions: [pl-restore]
+  - key: pl-backups
+    name: Backups
+    short: plb
+    group: PLike
+    gvr: pl.example.com/v1/backups
+    namespaced: true
+    columns:
+      - {header: NAME, path: .metadata.name}
+      - {header: PHASE, path: .status.phase, severity: bphase}
+    actions: [describe]
+actions:
+  - id: pl-restore
+    label: Restore
+    verb: create
+    params:
+      - name: source
+        label: source backup
+        required: true
+        optionsFrom: pl.example.com/v1/backups
+    template:
+      apiVersion: pl.example.com/v1
+      kind: Cluster
+      metadata:
+        name: "{{.Name}}-restore"
+        namespace: "{{.Namespace}}"
+      spec:
+        bootstrap:
+          recovery:
+            backup: {name: "{{.Params.source}}"}
+edges:
+  - from: pl.example.com/v1/backups
+    to: pl.example.com/v1/clusters
+    via: field
+    key: .spec.cluster.name
+`
+
+func plBackup(ns, name, cluster, phase string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "pl.example.com/v1",
+		"kind":       "Backup",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"spec":       map[string]any{"cluster": map[string]any{"name": cluster}},
+		"status":     map[string]any{"phase": phase},
+	}}
+}
+
+var plBackupGVR = schema.GroupVersionResource{Group: "pl.example.com", Version: "v1", Resource: "backups"}
+
+// "Which backup do I restore from?" is a question the pack already answers, in
+// its edges. Resolving it through them rather than through a new query
+// language is the whole reason a GVR is allowed in optionsFrom.
+func TestLensParamsRelatedListsTheRelatedObjects(t *testing.T) {
+	s := lensStoreWithKinds(t, relatedParamPack,
+		map[schema.GroupVersionResource]string{
+			plGVR:       "ClusterList",
+			plBackupGVR: "BackupList",
+		},
+		plCluster("data", "my-db", "my-db-1"),
+		plBackup("data", "my-db-daily-1", "my-db", "completed"),
+		plBackup("data", "my-db-daily-2", "my-db", "failed"),
+		// A backup of a DIFFERENT cluster must not be offered: restoring from
+		// it would bootstrap the new cluster off another database entirely.
+		plBackup("data", "other-daily-1", "other-db", "completed"),
+	)
+	syncStore(t, s, "pl-clusters")
+	syncStore(t, s, "pl-backups")
+
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-restore", "source")
+	got := strings.Join(optionValues(p), ",")
+	if strings.Contains(got, "other-daily-1") {
+		t.Errorf("options = %q, must not offer another cluster's backup", got)
+	}
+	if !strings.Contains(got, "my-db-daily-1") || !strings.Contains(got, "my-db-daily-2") {
+		t.Errorf("options = %q, want both of this cluster's backups", got)
+	}
+	// The note is what the operator actually chooses on: restoring from a
+	// failed backup is the mistake this prevents.
+	for _, o := range p.Options {
+		if o.Value == "my-db-daily-2" && !strings.Contains(o.Note, "failed") {
+			t.Errorf("failed backup offered with note %q, which does not say so", o.Note)
+		}
+	}
+}
+
+// A kind nobody has opened has no cache to read. Saying so is the point: "not
+// loaded" and "there are none" send the operator to different places, and a
+// blank list claims the second when it means the first.
+func TestLensParamsRelatedSaysWhenTheKindIsNotLoaded(t *testing.T) {
+	s := lensStoreWithKinds(t, relatedParamPack,
+		map[schema.GroupVersionResource]string{
+			plGVR:       "ClusterList",
+			plBackupGVR: "BackupList",
+		},
+		plCluster("data", "my-db", "my-db-1"),
+		plBackup("data", "my-db-daily-1", "my-db", "completed"),
+	)
+	syncStore(t, s, "pl-clusters") // deliberately NOT pl-backups
+
+	p := paramSpec(t, s.LensActions("pl-clusters", "data", "my-db", ""), "pl-restore", "source")
+	if len(p.Options) != 0 {
+		t.Fatalf("options = %+v, want none from an unopened kind", p.Options)
+	}
+	if p.OptionsNote == "" {
+		t.Error("an empty list from an unopened kind must say so")
+	}
+}
+
 // confirmValue names the string a typed confirmation must match. Fencing is
 // about an INSTANCE; asking the operator to type the cluster's name confirms
 // something they were never shown, which is the failure typed-confirm exists
