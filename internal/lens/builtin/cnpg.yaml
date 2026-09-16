@@ -24,8 +24,13 @@ severities:
     warn: [pending, started, running, finalizing]
     error: [failed, walArchivingFailing, "invalid backup definition"]
     default: unknown
+  # Pooler.status.phase is an ENUM, unlike the Cluster's sentence — active,
+  # paused, inactive, failed. The pack used to name "Pooler is ready" here,
+  # which CNPG never writes, so every healthy PgBouncer graded warn.
   pooler-phase:
-    ok: ["Pooler is ready"]
+    ok: [active]
+    warn: [paused, inactive]
+    error: [failed]
     default: warn
 
 kinds:
