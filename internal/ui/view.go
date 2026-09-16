@@ -362,13 +362,18 @@ func colorOf(cond bool, a, b lipgloss.Color) lipgloss.Color {
 
 // fitCols sizes the visible columns for avail cells. Columns are dropped from
 // the right (never the first one) before the name column gets crushed.
-func fitCols(cols []string, rows [][]string, avail, gap int) ([]int, []int) {
+//
+// extra[ci] is the number of cells a column spends on decoration inside its
+// own width — a trend arrow, a severity glyph. It is reserved here, once, from
+// every row's worth of the column, so the column does not jitter by two cells
+// as a decoration comes and goes between frames.
+func fitCols(cols []string, rows [][]string, extra []int, avail, gap int) ([]int, []int) {
 	keep := make([]int, len(cols))
 	for i := range keep {
 		keep[i] = i
 	}
 	for {
-		w, ok := tryFit(cols, rows, keep, avail, gap)
+		w, ok := tryFit(cols, rows, extra, keep, avail, gap)
 		if ok || len(keep) <= 2 {
 			return w, keep
 		}
@@ -376,16 +381,24 @@ func fitCols(cols []string, rows [][]string, avail, gap int) ([]int, []int) {
 	}
 }
 
-func tryFit(cols []string, rows [][]string, keep []int, avail, gap int) ([]int, bool) {
+func tryFit(cols []string, rows [][]string, extra, keep []int, avail, gap int) ([]int, bool) {
 	n := len(keep)
 	nat := make([]int, n)
 	min := make([]int, n)
 	for k, ci := range keep {
-		nat[k] = len(cols[ci])
+		nat[k] = 0
 		for _, r := range rows {
 			if ci < len(r) && len(r[ci]) > nat[k] {
 				nat[k] = len(r[ci])
 			}
+		}
+		// Decoration widens the values, never the header: a header already
+		// wider than "value + glyph" needs no further room.
+		if ci < len(extra) {
+			nat[k] += extra[ci]
+		}
+		if h := len(cols[ci]); h > nat[k] {
+			nat[k] = h
 		}
 		m := 7
 		if ci == 0 {
@@ -438,44 +451,83 @@ var statusColors = map[string]string{
 	"CrashLoopBackOff": "err", "Error": "err", "ImagePullBackOff": "err", "Failed": "err", "Evicted": "err",
 }
 
-// cellColor picks a cell's colour. level, when non-empty, is a lens pack's
-// declared severity and wins outright: a pack that says Degraded is an error
-// has said so about that exact column, which beats every guess below it.
+// cellLevel grades one cell, in the lens vocabulary. level, when non-empty, is
+// a lens pack's declared severity and wins outright: a pack that says Degraded
+// is an error has said so about that exact column, which beats every guess
+// below it. "" means the cell carries no severity at all.
+//
+// This is the ONE grading decision in the table: colour and glyph both read it,
+// so a cell can never be painted red without also being marked. "subtle" is a
+// colour, not a severity — Completed and <none> are dimmed, never glyphed.
 //
 // The lens vocabulary is "error"; statusColors says "err". They are kept
 // separate rather than merged, because one table maps VALUES and the other
 // maps LEVELS — collapsing them would silently drop lens errors to default.
-func cellColor(th theme.Theme, level, v string, def lipgloss.Color) lipgloss.Color {
+func cellLevel(level, v string) string {
 	switch level {
-	case "ok":
-		return th.Ok
-	case "warn":
-		return th.Warn
-	case "error":
-		return th.Err
-	case "unknown":
-		return th.Subtle
+	case "ok", "warn", "error", "unknown":
+		return level
 	}
 	if strings.Contains(v, "SchedulingDisabled") {
-		return th.Warn
+		return "warn"
 	}
 	switch statusColors[v] {
 	case "ok":
-		return th.Ok
+		return "ok"
 	case "warn":
-		return th.Warn
+		return "warn"
 	case "err":
-		return th.Err
+		return "error"
 	case "subtle":
-		return th.Subtle
+		return "subtle"
 	}
 	// "1/3" is a ready ratio and deserves a warning. "80/TCP" is a port and
 	// does not — both halves must be numbers before this means anything.
 	if strings.Contains(v, "/") && len(v) <= 7 {
 		parts := strings.SplitN(v, "/", 2)
 		if len(parts) == 2 && allDigits(parts[0]) && allDigits(parts[1]) && parts[0] != parts[1] {
-			return th.Warn
+			return "warn"
 		}
+	}
+	return ""
+}
+
+// severityGlyph is the leading mark for a graded cell. Severity is otherwise
+// carried by colour alone, which is unreadable for a colour-blind operator and
+// on a low-contrast terminal: the worst-first sort is still right, but "which
+// of these is the failure" is not answerable without it.
+//
+// Plain ASCII, one cell wide each, on purpose — an emoji is width-2 in some
+// terminals and width-1 in others, and the row is padded arithmetically, so a
+// mis-measured glyph shifts every column to its right.
+//
+// The trailing space is part of the returned constant so the mark is ONE
+// painted run per cell rather than two: at 40 rows × several graded columns a
+// second run per cell is a few KB of escape sequences on every frame.
+func severityGlyph(level string) string {
+	switch level {
+	case "ok":
+		return "+ "
+	case "warn":
+		return "! "
+	case "error":
+		return "x "
+	case "unknown":
+		return "? "
+	}
+	return ""
+}
+
+func cellColor(th theme.Theme, level, v string, def lipgloss.Color) lipgloss.Color {
+	switch cellLevel(level, v) {
+	case "ok":
+		return th.Ok
+	case "warn":
+		return th.Warn
+	case "error":
+		return th.Err
+	case "unknown", "subtle":
+		return th.Subtle
 	}
 	return def
 }
@@ -687,10 +739,11 @@ func (m *Model) tableBody(inner, rows int) []string {
 	numW = clamp(numW, 2, 5)
 	gutter := numW + 3 // "▌" + space + digits + space
 
-	// Usage columns get a trailing " ▲"/" ▼" (see trend.go). The arrow is
-	// laid out as part of the cell, so the column is sized with two extra
-	// cells and never jitters as arrows come and go.
-	nameIdx, nsIdx, hasMetric := -1, -1, false
+	// Usage columns get a trailing " ▲"/" ▼" (see trend.go); graded cells get
+	// a leading "x "/"! ". Both are laid out inside the cell, so the column
+	// reserves the two cells up front and never jitters as the decoration
+	// comes and goes.
+	nameIdx, nsIdx := -1, -1
 	metric := make([]bool, len(cols))
 	for ci, c := range cols {
 		switch {
@@ -699,23 +752,40 @@ func (m *Model) tableBody(inner, rows int) []string {
 		case c == "NAMESPACE":
 			nsIdx = ci
 		case metricColumn(c):
-			metric[ci], hasMetric = true, true
+			metric[ci] = true
 		}
 	}
-	sized := allRows
-	if hasMetric {
-		sized = make([][]string, len(allRows))
-		for i, row := range allRows {
-			r := append([]string(nil), row...)
-			for ci := range r {
-				if ci < len(metric) && metric[ci] {
-					r[ci] += "  "
-				}
+
+	// Resolved ONCE per frame, not once per cell: the assertion is cheap but
+	// the row loop runs width × height times.
+	level := m.levelFor(m.res().Key)
+	glyphFor := func(ci int, v string) string {
+		lvl := ""
+		if level != nil && ci < len(cols) {
+			lvl = level(cols[ci], v)
+		}
+		return severityGlyph(cellLevel(lvl, v))
+	}
+
+	// One pass, no copy of the rows: a column reserves the glyph as soon as a
+	// single row of it grades, and is then skipped for the rest of the scan.
+	extra := make([]int, len(cols))
+	for ci := range cols {
+		if metric[ci] {
+			extra[ci] = 2
+		}
+	}
+	for _, row := range allRows {
+		for ci := range row {
+			if ci >= len(extra) || extra[ci] > 0 {
+				continue
 			}
-			sized[i] = r
+			if glyphFor(ci, row[ci]) != "" {
+				extra[ci] = 2
+			}
 		}
 	}
-	widths, keep := fitCols(cols, sized, inner-gutter, gap)
+	widths, keep := fitCols(cols, allRows, extra, inner-gutter, gap)
 	arrowFor := func(row []string, ci int) int {
 		if nameIdx < 0 || nameIdx >= len(row) || ci >= len(row) || !metric[ci] {
 			return 0
@@ -744,10 +814,6 @@ func (m *Model) tableBody(inner, rows int) []string {
 		}
 	}
 	out := []string{hdr.String(), paint(th.Bg, th.Border, false, strings.Repeat("╌", inner))}
-
-	// Resolved ONCE per frame, not once per cell: the assertion is cheap but
-	// the row loop runs width × height times.
-	level := m.levelFor(m.res().Key)
 
 	// Every cell is padded or truncated to its column width, and the metric
 	// columns spend their last two cells on the arrow, so a row's visible
@@ -796,20 +862,35 @@ func (m *Model) tableBody(inner, rows int) []string {
 			if level != nil && ci < len(cols) {
 				lvl = level(cols[ci], v)
 			}
+			lvl = cellLevel(lvl, v)
 			col := cellColor(th, lvl, v, base)
 			if ci < len(cols) && cols[ci] == "NAMESPACE" {
 				col = th.Accent2
 			}
+			// The glyph is drawn in the two cells the column reserved for
+			// it, so the value keeps its own width and the row still adds
+			// up to rowW.
+			w := widths[k]
+			if ci < len(extra) && extra[ci] > 0 && !metric[ci] {
+				// The whole column spends the two cells, glyph or not, so
+				// an ungraded value still lines up under a graded one.
+				g := severityGlyph(lvl)
+				if g == "" {
+					g = "  "
+				}
+				b.WriteString(paint(bg, col, false, g))
+				w -= 2
+			}
 			// Padded by display width, not rune count: a CJK or emoji cell
 			// is wider than its runes, and a cell wider than its column
 			// pushes the row past the panel it is drawn in.
-			cell := pad(trunc(v, widths[k]), widths[k])
+			cell := pad(trunc(v, w), w)
 			switch {
 			case ci < len(cols) && cols[ci] == nameCol && sel:
 				b.WriteString(paint(bg, col, true, cell))
-			case ci < len(metric) && metric[ci] && widths[k] > 2:
+			case ci < len(metric) && metric[ci] && w > 2:
 				// Value, then the arrow in the two reserved cells.
-				cell = pad(trunc(v, widths[k]-2), widths[k]-2)
+				cell = pad(trunc(v, w-2), w-2)
 				b.WriteString(paint(bg, col, false, cell))
 				b.WriteString(paint(bg, bg, false, " "))
 				b.WriteString(trendGlyph(th, bg, arrowFor(row, ci)))
@@ -1038,6 +1119,28 @@ func (m *Model) viewPrompt(l layout) Block {
 	}, body)
 }
 
+// fitToast shortens a toast from the MIDDLE, not the tail. A toast that is
+// too long is nearly always a path, and the tail of a path is its filename —
+// the one part the reader has to retype. Cutting the end leaves
+// "/home/k/.k10s/exports/pods-api-gate…", which names no file at all.
+func fitToast(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= w {
+		return s
+	}
+	if w <= 3 {
+		return string(r[:w])
+	}
+	// A quarter to the head, the rest to the tail: the head only has to carry
+	// enough to recognise ("✓ saved /home/s…"), while the tail has to carry a
+	// whole filename.
+	head := w / 4
+	return string(r[:head]) + "…" + string(r[len(r)-(w-head-1):])
+}
+
 func (m *Model) viewStatus() Block {
 	th := m.th()
 	dot, dotCol := " ● ", th.Accent2
@@ -1045,10 +1148,23 @@ func (m *Model) viewStatus() Block {
 		// Make copy-mode unmistakable: clicking is dead while it's on.
 		dot, dotCol = " ✂ ", th.Warn
 	}
-	left := paint(th.Bg, dotCol, false, dot) + paint(th.Bg, th.Fg, false, trunc(m.toast, m.w/2))
+	// The hints are the same every frame and the reader has read them; a toast
+	// is the only surface some results have at all — ctrl+y's export path is
+	// nowhere else — so while one is showing the hints give up width to it
+	// rather than clipping it at half the screen.
 	hints := "tab panes · enter open · ctrl+p search · f find · z zoom · ctrl+s copy · q quit"
-	right := paint(th.Bg, th.Subtle, false, trunc(hints, m.w/2-2)) + paint(th.Bg, th.Bg, false, " ")
-	rightPlain := trunc(hints, m.w/2-2)
+	hintw := m.w/2 - 2
+	if m.toast != "" {
+		hintw = m.w / 3
+	}
+	right := paint(th.Bg, th.Subtle, false, trunc(hints, hintw)) + paint(th.Bg, th.Bg, false, " ")
+	rightPlain := trunc(hints, hintw)
+
+	toastw := m.w - lipgloss.Width(dot) - lipgloss.Width(rightPlain) - 2
+	if toastw < 20 {
+		toastw = 20
+	}
+	left := paint(th.Bg, dotCol, false, dot) + paint(th.Bg, th.Fg, false, fitToast(m.toast, toastw))
 
 	// A waiting release earns one clickable badge and nothing more: the
 	// toast that announced it scrolls away, and there is no other place that
@@ -1059,7 +1175,7 @@ func (m *Model) viewStatus() Block {
 		rightPlain = " " + badge + " │ " + rightPlain
 	}
 
-	gapw := m.w - lipgloss.Width(dot) - lipgloss.Width(trunc(m.toast, m.w/2)) - lipgloss.Width(rightPlain) - 1
+	gapw := m.w - lipgloss.Width(dot) - lipgloss.Width(fitToast(m.toast, toastw)) - lipgloss.Width(rightPlain) - 1
 	if gapw < 1 {
 		gapw = 1
 	}

@@ -18,7 +18,7 @@ func IsAsyncMsg(msg tea.Msg) bool {
 	// lensDoneMsg is the write's own result and resolves once. lensAckMsg is
 	// deliberately NOT here: it reschedules itself until the controller
 	// answers, so chasing it headlessly would loop for the whole timeout.
-	case textResultMsg, actionResultMsg, srcConnectedMsg, ctxSwitchMsg, logStartMsg, logOlderMsg, shellStartMsg, editFetchedMsg, editExitMsg, portForwardMsg, updateCheckMsg, updateAppliedMsg, lensDoneMsg:
+	case textResultMsg, actionResultMsg, srcConnectedMsg, ctxSwitchMsg, logStartMsg, logOlderMsg, shellStartMsg, editFetchedMsg, editExitMsg, portForwardMsg, updateCheckMsg, updateAppliedMsg, lensDoneMsg, exportDoneMsg:
 		return true
 	}
 	return false

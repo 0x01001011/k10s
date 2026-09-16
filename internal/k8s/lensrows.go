@@ -12,6 +12,7 @@ import (
 	"github.com/0x01001011/k10s/internal/lens"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/client-go/util/jsonpath"
 )
 
@@ -99,6 +100,8 @@ func formatLensCell(format string, truncate int, raw string) string {
 	switch format {
 	case "age":
 		v = lensAge(v)
+	case "until":
+		v = lensUntil(v)
 	case "bytes":
 		if n, ok := parseLensNumber(v); ok {
 			v = humanBytesLens(int64(n))
@@ -135,6 +138,26 @@ func lensAge(v string) string {
 		return "-"
 	}
 	return age(t)
+}
+
+// lensUntil renders time REMAINING for a future instant (cert-manager's
+// .status.notAfter), because duration.ShortHumanDuration returns the literal
+// "<invalid>" for anything below -1s — so format: age would print "<invalid>"
+// on every healthy certificate. Once the instant is past it falls back to
+// lensAge, so an expired cert reads as an age like every other time column.
+func lensUntil(v string) string {
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return lensAge(v) // "" for empty, "-" for unparseable
+	}
+	if d := time.Until(t); d > 0 {
+		return duration.ShortHumanDuration(d)
+	}
+	// A leading "-" is the only thing separating "expires in 3d" from "expired
+	// 3 days ago": both render as "3d" otherwise, in the same colour, and an
+	// EXPIRES column that cannot say which side of now it is on is worse than
+	// no column.
+	return "-" + age(t)
 }
 
 func parseLensNumber(v string) (float64, bool) {

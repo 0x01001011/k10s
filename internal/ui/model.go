@@ -992,6 +992,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showText(msg.title, msg.body)
 		return m, nil
 
+	case exportDoneMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.toast = "✗ export failed: " + msg.err.Error()
+			return m, nil
+		}
+		// The absolute path is the whole payload of this feature: it is what
+		// gets pasted into the ticket.
+		// Short prefix: the status line clips the toast at half the terminal
+		// width, and the path is the only part worth the room.
+		m.toast = "✓ saved " + tildePath(msg.path)
+		return m, nil
+
 	case lensDoneMsg:
 		return m, m.handleLensDone(msg)
 
@@ -1563,6 +1576,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.openPalette()
 	case "ctrl+s":
 		return m.toggleMouse()
+	case "ctrl+y":
+		// Export what is on screen to a file — see export.go for why a path
+		// and not the clipboard.
+		return m.exportCmd()
 	case "ctrl+a":
 		if aiDisabled {
 			m.noticeAI()

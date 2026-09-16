@@ -303,8 +303,9 @@ func TestBuiltinPacksAllParse(t *testing.T) {
 		t.Errorf("builtin pack failed to parse: %v", err)
 	}
 	for _, want := range []string{
-		"argocd", "cnpg", "fleet", "k3s-helm", "k3s-upgrade",
-		"kargo", "longhorn", "rancher", "traefik", "victoriametrics",
+		"argocd", "cert-manager", "cnpg", "fleet", "flux", "gatewayapi",
+		"k3s-helm", "k3s-upgrade", "kargo", "longhorn", "rancher",
+		"traefik", "victoriametrics",
 	} {
 		if !hasPack(packs, want) {
 			t.Errorf("builtin pack %q missing", want)

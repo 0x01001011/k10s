@@ -217,3 +217,37 @@ func TestCompileColumnsAttachesSeverityTables(t *testing.T) {
 		t.Errorf("unlisted value = %v, want the table's default (warn)", got)
 	}
 }
+
+// format: until exists because cert-manager's EXPIRES renders .status.notAfter,
+// a FUTURE instant. format: age would hand ShortHumanDuration a negative
+// duration, and apimachinery returns the literal "<invalid>" below -1s
+// (pkg/util/duration/duration.go:29) — i.e. "<invalid>" on every HEALTHY cert.
+func TestLensUntilFormat(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// A minute of slack: RFC3339 truncates to the second and the clock
+		// moves between building the input and reading it, so an exact
+		// boundary would floor to 11d. Real expiries are never on the second.
+		{"twelve days out", now.Add(12*24*time.Hour + time.Minute).UTC().Format(time.RFC3339), "12d"},
+		{"thirty-one days out", now.Add(31*24*time.Hour + time.Minute).UTC().Format(time.RFC3339), "31d"},
+		{"two hours out", now.Add(2*time.Hour + time.Minute).UTC().Format(time.RFC3339), "2h"},
+		// Already expired: reads as an age, never "<invalid>" and never negative.
+		// The leading "-" is load bearing: without it an expired cert and one
+		// with three days left both read "3d" in the same colour.
+		{"expired three days ago", now.Add(-3 * 24 * time.Hour).UTC().Format(time.RFC3339), "-3d"},
+		{"expired an hour ago", now.Add(-time.Hour).UTC().Format(time.RFC3339), "-1h"},
+		{"empty", "", ""},
+		{"garbage", "not a time", "-"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := formatLensCell("until", 0, c.in); got != c.want {
+				t.Errorf("formatLensCell(until, %q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}

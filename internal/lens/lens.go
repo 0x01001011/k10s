@@ -105,7 +105,8 @@ func (s Severity) Level(v string) Level {
 type Column struct {
 	Header string `json:"header"`
 	Path   string `json:"path"`
-	// Format is age, bytes, int, bool, or empty for the verbatim string.
+	// Format is age, until, bytes, int, bool, or empty for the verbatim
+	// string. until is age's mirror for a FUTURE instant (an expiry).
 	Format string `json:"format"`
 	// Truncate cuts to N runes. Git revisions want 7.
 	Truncate int `json:"truncate"`
@@ -324,7 +325,7 @@ func (p Pack) validateKind(k Kind) error {
 			return fmt.Errorf("kind %q: column %q: %w", k.Key, c.Header, err)
 		}
 		switch c.Format {
-		case "", "age", "bytes", "int", "bool":
+		case "", "age", "until", "bytes", "int", "bool":
 		default:
 			return fmt.Errorf("kind %q: column %q: unknown format %q", k.Key, c.Header, c.Format)
 		}
