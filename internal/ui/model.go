@@ -318,6 +318,15 @@ type Model struct {
 	logNS      string
 	logName    string
 
+	// What the log viewer draws: textLines holds the raw lines as received,
+	// logDisps their parsed form, and logShown the subset passing the two
+	// filters. See logview.go.
+	logDisps  []logDisp
+	logShown  []string
+	logFilter string   // text box: terms match, -term excludes
+	logMin    logLevel // severity floor, lvlNone for "everything"
+	logRaw    bool     // show lines exactly as received, unparsed
+
 	rowMem map[string]int
 
 	// Self-update (see update.go). updRel is the newest release once a check
@@ -1079,6 +1088,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logLoading = false
 		m.logScroll = 0
 		m.logFollow = true
+		// A new log starts unfiltered: a filter left over from the last pod
+		// would look like an empty log here.
+		m.logFilter, m.logMin = "", lvlNone
+		m.rebuildLog()
 		m.toast = msg.title
 		if msg.ch == nil {
 			return m, nil // history only; nothing to follow
@@ -1132,6 +1145,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textLines = append(msg.lines[:added:added], m.textLines...)
 		}
 		m.logMore = msg.more
+		m.rebuildLog()
 		return m, nil
 
 	case logLineMsg:
@@ -1139,17 +1153,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // stale stream, user moved on
 		}
 		if !msg.ok {
+			// The end-of-stream marker is not log content and is never
+			// filtered away: "the stream ended" is always worth knowing.
 			m.textLines = append(m.textLines, "── stream closed")
+			m.logDisps = append(m.logDisps, logDisp{text: "── stream closed"})
+			m.logShown = append(m.logShown, "── stream closed")
 			return m, nil
 		}
 		m.textLines = append(m.textLines, msg.line)
+		shown := m.appendLogLine(msg.line)
 		// While paused, a new line arriving at the bottom would shift the
 		// view; keep the same content in place by growing the offset. The
 		// offset counts display rows, so a line that wraps has to push by
 		// every row it takes — pushing by one per line was what made a
-		// paused view still creep upwards.
-		if !m.logFollow {
-			m.logScroll += m.logRows(msg.line)
+		// paused view still creep upwards. A line the filter hides pushes
+		// nothing: it never reached the screen.
+		if !m.logFollow && shown {
+			m.logScroll += m.logRows(m.logShown[len(m.logShown)-1])
 		}
 		return m, waitLogLine(m.logGen, m.logCh)
 
@@ -1502,18 +1522,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.move(1)
 			return nil
 		case "esc":
-			m.rowSearch = ""
-			m.resetRowSelection()
+			m.setSearchText("")
 			m.focus = focusMain
 			return nil
 		case "enter":
 			m.focus = focusMain
 			return nil
 		case "backspace":
-			if len(m.rowSearch) > 0 {
-				rs := []rune(m.rowSearch)
-				m.rowSearch = string(rs[:len(rs)-1])
-				m.resetRowSelection()
+			if q := m.searchText(); q != "" {
+				rs := []rune(q)
+				m.setSearchText(string(rs[:len(rs)-1]))
 			}
 			return nil
 		case "tab":
@@ -1535,8 +1553,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		if isTypedText(msg) && len(key) < 24 {
-			m.rowSearch += string(msg.Runes)
-			m.resetRowSelection()
+			m.setSearchText(m.searchText() + string(msg.Runes))
 		}
 		return nil
 	}
@@ -1558,9 +1575,29 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// to "where does slash go".
 	// (The resource list is already type-to-filter and returns earlier, so
 	// this only ever concerns the main table.)
-	if key == "f" && m.focus == focusMain && m.mode == modeTable {
+	if key == "f" && m.focus == focusMain && (m.mode == modeTable || m.mode == modeLogs) {
 		m.focus = focusMainSearch
 		return nil
+	}
+
+	// The log viewer's own controls. They are checked before the action
+	// hotkeys so "t" means "raw text" while you are reading a log, and still
+	// means whatever it means everywhere else.
+	if m.mode == modeLogs && m.focus == focusMain {
+		switch key {
+		case "w":
+			m.cycleLogLevel()
+			if m.logMin == lvlNone {
+				m.toast = "log level → all"
+			} else {
+				m.toast = "log level → " + m.logMin.String() + " and above"
+			}
+			return nil
+		case "t":
+			m.toggleLogRaw()
+			m.toast = map[bool]string{true: "raw log lines", false: "parsed log lines"}[m.logRaw]
+			return nil
+		}
 	}
 
 	switch key {
@@ -2036,6 +2073,25 @@ func (m *Model) syncScroll() {
 	if m.rowScroll < 0 {
 		m.rowScroll = 0
 	}
+}
+
+// searchText/setSearchText are the one search box pointed at whatever the
+// main panel is showing: table rows, or log lines. One key ("f"), one box,
+// one place to look — the panel underneath decides what gets filtered.
+func (m *Model) searchText() string {
+	if m.mode == modeLogs {
+		return m.logFilter
+	}
+	return m.rowSearch
+}
+
+func (m *Model) setSearchText(q string) {
+	if m.mode == modeLogs {
+		m.setLogFilter(q)
+		return
+	}
+	m.rowSearch = q
+	m.resetRowSelection()
 }
 
 func (m *Model) selectResource(i int) {

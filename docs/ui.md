@@ -198,6 +198,18 @@ Opened with `l`, `enter` or a double-click on anything that has logs.
 - **Level tokens are coloured** (`ERROR`/`FATAL` red, `WARN` amber, `INFO`
   green, `DEBUG` dim) and the leading timestamp is dimmed; the message itself
   stays in the normal foreground, because that is what you actually read.
+- **Structured lines are parsed** (`t` toggles raw). A JSON record from
+  zap/logr, or a logfmt line, is drawn as `time LEVEL message │ k=v k=v`: the
+  message first, the context dimmed behind it, and the record's own timestamp
+  dropped when the container already stamped the line. Anything that is not a
+  structured record is shown exactly as it arrived — an unparseable line is
+  still a line you need to read.
+- **`f` filters, live** (`esc` clears): terms match, `-term` excludes, all
+  case-insensitive, matched against the line as drawn. The status line counts
+  `shown/loaded`; nothing is discarded, so clearing the filter brings it back.
+- **`w` cycles the level floor**: all → `INFO` → `WARN` → `ERROR` → all. Lines
+  with no level at all are never hidden — that is where the stack trace under
+  the `ERROR` lives.
 
 Kinds with no logs of their own fall back to **describe** rather than
 reporting an error — there is nothing the user could do about "this kind has
