@@ -162,9 +162,11 @@ kinds:
 			want: `unknown format "hexadecimal"`,
 		},
 		{
+			// A pack with neither is empty. A pack with edges and no kinds
+			// is core.yaml, and is valid.
 			name: "no kinds",
 			yaml: "name: bad",
-			want: "declares no kinds",
+			want: "declares neither kinds nor edges",
 		},
 		{
 			name: "annotate with no annotations",
@@ -210,16 +212,19 @@ kinds:
 			want: `duplicate kind key "k"`,
 		},
 		{
+			// A BARE version is the core group and is accepted: discovery
+			// reports core as "v1", so a pack requiring it has to write
+			// that. Three segments is still nothing discovery reports.
 			name: "requires is not group/version",
 			yaml: `
 name: bad
-requires: [justagroup]
+requires: [too/many/parts]
 kinds:
   - key: k
     gvr: g/v1/r
     columns: [{header: NAME, path: .metadata.name}]
 `,
-			want: `requires "justagroup"`,
+			want: `requires "too/many/parts"`,
 		},
 	}
 

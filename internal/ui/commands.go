@@ -292,9 +292,13 @@ func Help() string {
     D delete (confirm dialog)
     R related — one hop out, both directions, for kinds a lens pack covers
     X tree — the same edges walked three hops and drawn as a tree, with each
-      object's own graded cells beside it. This is the Kargo pipeline
-      (warehouse → stage → stage) and the ArgoCD fan-out (appproject →
-      applications → workloads) in one frame.
+      object's own graded cells beside it and a header counting what needs
+      attention. Works on everything: a pod's owners, volumes, config and
+      node come from the always-on core pack, and the operator packs add the
+      Kargo pipeline (warehouse → stage → stage) and the ArgoCD fan-out
+      (appproject → applications → workloads).
+      In the tree: ↑↓ move · enter opens that object's table with the row
+      selected · X re-roots the walk there · R lists its one hop · esc closes
     1..9 lens verbs (sync, promote, fence, detach …) on ArgoCD, Kargo, CNPG,
       Longhorn and Traefik kinds. Disabled ones stay listed and say why;
       the destructive ones ask you to type the object's name.
