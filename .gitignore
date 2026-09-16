@@ -11,4 +11,8 @@ coverage.html
 # CodeGraph index (rebuild with `codegraph init .`)
 /.codegraph
 
+# Agent tool-call logs. Per-session and machine-local, hundreds of KB each.
+/receipts
+/review-receipts
+
 .DS_Store

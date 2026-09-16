@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v codegraph >/dev/null 2>&1 && codegraph sync \"$CLAUDE_PROJECT_DIR\" >/dev/null 2>&1 || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
