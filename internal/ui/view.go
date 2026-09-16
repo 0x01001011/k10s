@@ -57,6 +57,9 @@ func (m *Model) View() string {
 	if m.confirm != nil {
 		root = m.overlayConfirm(root)
 	}
+	if m.lensForm != nil {
+		root = m.overlayLensForm(root)
+	}
 	return scanZones(root.String())
 }
 

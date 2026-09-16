@@ -157,6 +157,14 @@ func (m *Model) fireLensAction(sp domain.LensActionSpec) tea.Cmd {
 		return nil
 	}
 
+	// An action that declares parameters collects them in a form, which owns
+	// its own confirmation: the word to type is one of the values being
+	// chosen, so it cannot be settled before they are.
+	if len(sp.Params) > 0 {
+		m.openLensForm(kind, ns, name, short, sp)
+		return nil
+	}
+
 	run := func(mm *Model) tea.Cmd { return mm.runLensAction(kind, ns, name, short, sp, nil) }
 
 	switch sp.Confirm {
