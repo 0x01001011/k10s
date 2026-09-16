@@ -291,6 +291,10 @@ func Help() string {
     the pane lists only the actions that apply to the selected kind
     D delete (confirm dialog)
     R related — one hop out, both directions, for kinds a lens pack covers
+    X tree — the same edges walked three hops and drawn as a tree, with each
+      object's own graded cells beside it. This is the Kargo pipeline
+      (warehouse → stage → stage) and the ArgoCD fan-out (appproject →
+      applications → workloads) in one frame.
     1..9 lens verbs (sync, promote, fence, detach …) on ArgoCD, Kargo, CNPG,
       Longhorn and Traefik kinds. Disabled ones stay listed and say why;
       the destructive ones ask you to type the object's name.

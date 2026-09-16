@@ -1602,6 +1602,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.saveConfig()
 	case "R":
 		return m.showRelated()
+	case "X":
+		// X-ray, the name k9s gave this idea and the one operators already
+		// have. R answers "what is next to this"; X answers "what is the
+		// shape, and where in it is the failure".
+		return m.showTree()
 	case "z":
 		m.setZoomed(!m.zoomed)
 		m.toast = map[bool]string{true: "zoomed", false: "restored"}[m.zoomed]

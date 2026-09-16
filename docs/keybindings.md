@@ -117,6 +117,14 @@ nothing greyed out.
 | `o` | Cordon / **Uncordon** (label follows state) | nodes                                 |
 | `u` | **Drain** — confirm modal, cordons + evicts | nodes                                 |
 | `D` | **Delete** — red confirm modal              | most                                  |
+| `R` | Related — one hop out, both directions      | kinds a lens pack covers              |
+| `X` | Tree — three hops, drawn, statuses inline   | kinds a lens pack covers              |
+
+`R` answers "what is next to this". `X` answers "what is the whole thing, and
+where in it is the failure" — the Kargo pipeline (warehouse → stage → stage)
+or the ArgoCD fan-out (appproject → applications → workloads) in one frame.
+Neither starts a watch, so a kind nobody has opened reads as *not loaded*
+rather than opening itself. See [lenses.md](lenses.md).
 
 Confirm modals: `enter`/`y` confirm · `esc`/`n` cancel.
 

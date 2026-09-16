@@ -180,3 +180,21 @@ edges:
     to: argoproj.io/v1alpha1/applications
     via: label
     key: app.kubernetes.io/instance
+
+  # .spec.project is a bare AppProject name and is always set — the API
+  # server defaults it to "default" — so this edge resolves on every
+  # Application. Read backwards it is the useful direction: an AppProject
+  # lists the Applications it governs, which is the fan-out a sync window or
+  # a destination restriction actually applies to.
+  - from: argoproj.io/v1alpha1/applications
+    to: argoproj.io/v1alpha1/appprojects
+    via: field
+    key: .spec.project
+
+  # An ApplicationSet owns the Applications it generates, so the hop is an
+  # ownerReference rather than a field. It resolves only for generated
+  # Applications, which is correct: a hand-written one has no ApplicationSet
+  # and must not claim one.
+  - from: argoproj.io/v1alpha1/applications
+    to: argoproj.io/v1alpha1/applicationsets
+    via: ownerRef

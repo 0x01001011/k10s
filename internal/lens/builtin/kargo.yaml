@@ -170,6 +170,28 @@ edges:
     to: kargo.akuity.io/v1alpha1/freights
     via: field
     key: .spec.freight
+
+  # The pipeline itself. A Stage names the Stages it draws Freight from in
+  # .spec.requestedFreight[].sources.stages, so this single self-edge IS the
+  # promotion DAG: followed forward it is "what feeds me", and the same
+  # declaration read backwards is "what I feed". Fan-in and fan-out both fall
+  # out of it, because the field is a list on a list.
+  #
+  # Resolving in both directions is also why the tree keeps ONE visited set
+  # for the whole walk rather than one per branch — see internal/ui/tree.go.
+  - from: kargo.akuity.io/v1alpha1/stages
+    to: kargo.akuity.io/v1alpha1/stages
+    via: field
+    key: .spec.requestedFreight[*].sources.stages[*]
+
+  # Where Freight enters. origin is {kind, name} and kind is Warehouse for
+  # every origin the API serves today, so the name alone resolves — and this
+  # is the hop that gives a pipeline tree a root instead of starting it
+  # halfway down.
+  - from: kargo.akuity.io/v1alpha1/stages
+    to: kargo.akuity.io/v1alpha1/warehouses
+    via: field
+    key: .spec.requestedFreight[*].origin.name
   # The stage-to-Application hop is NOT declared, and that is deliberate.
   #
   # kargo.akuity.io/authorized-stage lives on the Application, naming the

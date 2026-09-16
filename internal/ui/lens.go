@@ -494,8 +494,15 @@ type rowIdent struct{ nameIdx, nsIdx int }
 
 // rowIdentity resolves those columns once for the table on screen.
 func rowIdentity(m *Model, cols []string) rowIdent {
+	return identFor(m.curKind().Key, cols)
+}
+
+// identFor is the same resolution for a kind that is NOT the one on screen.
+// The tree grades neighbours of every kind it walks into, and each of those
+// carries its own header row.
+func identFor(kind string, cols []string) rowIdent {
 	key := "NAME"
-	if m.curKind().Key == "events" {
+	if kind == "events" {
 		key = "OBJECT"
 	}
 	id := rowIdent{nameIdx: 0, nsIdx: -1}

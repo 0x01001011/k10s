@@ -43,6 +43,15 @@ var demoLensRows = map[string][][]string{
 		{"dev", "freight/c10d3e", "Healthy", "Running", "22d"},
 		{"prod", "freight/9f2c1b", "Healthy", "Succeeded", "22d"},
 	},
+	// AppProjects exist here only so the ArgoCD tree has somewhere to go.
+	// Three rows, matching the three projects the Application fixtures name —
+	// a project no Application references would make the tree look like it
+	// had missed an edge.
+	"argocd-projects": {
+		{"platform", "prod", "deny-friday", "31d"},
+		{"finance", "finance", "", "31d"},
+		{"data", "data", "", "31d"},
+	},
 	"cnpg-clusters": {
 		{"reporting-db", "2", "3", "reporting-db-2", "Failing over", "9", "21d"},
 		{"orders-db", "3", "3", "orders-db-1", "Cluster in healthy state", "4", "63d"},
@@ -232,6 +241,24 @@ func (s *Source) LensAck(kind, ns, name, id, want string) (bool, error) {
 // "not loaded" is the same wording the real backend uses for a kind nobody
 // has opened, which is exactly what these are.
 func (s *Source) Related(kind, ns, name string) ([]domain.Ref, error) {
+	if refs, ok := demoRelated[kind+"/"+name]; ok {
+		// Copied, because the caller sorts what it gets and a sort in place
+		// would reorder the fixture for every later walk — which is exactly
+		// the kind of run-to-run drift the tree's own sort exists to stop.
+		out := append([]domain.Ref(nil), refs...)
+		for i := range out {
+			// The real backend reports the namespace each neighbour was
+			// actually FOUND in, and a caller that walks several hops uses
+			// that to tell two same-named objects apart. A demo that left it
+			// empty would make every ref look cluster-scoped, so the walk
+			// would fail to recognise its own starting object and draw it
+			// again as its own descendant.
+			if out[i].Loaded {
+				out[i].Namespace = ns
+			}
+		}
+		return out, nil
+	}
 	_, k, ok := lensKindOf(kind)
 	if !ok {
 		return nil, nil
@@ -252,6 +279,57 @@ func (s *Source) Related(kind, ns, name string) ([]domain.Ref, error) {
 		refs = append(refs, domain.Ref{Kind: key, Rel: e.Via, Loaded: false})
 	}
 	return refs, nil
+}
+
+// demoRelated is the handful of relationships the demo can name OBJECTS for
+// rather than only kinds.
+//
+// It exists for the tree. A tree of "not loaded" lines demonstrates nothing,
+// and the demo is where the feature gets its screenshot — so the two shapes
+// worth showing are modelled properly: a Kargo promotion pipeline
+// (warehouse → dev → staging → prod, with the warehouse left unloaded
+// because the demo has no Warehouse table) and an ArgoCD AppProject fanning
+// out to the Applications it governs.
+//
+// Both directions are listed explicitly. The real backend derives them from
+// one declaration by scanning the far side, which the demo cannot do because
+// it models rows rather than object bodies; writing both halves here keeps
+// what the demo shows identical to what a cluster shows.
+var demoRelated = map[string][]domain.Ref{
+	"kargo-stages/dev": {
+		{Kind: "kargo-warehouses", Rel: lens.ViaField, Loaded: false},
+		{Kind: "kargo-stages", Name: "staging", Rel: lens.ViaField, Loaded: true},
+	},
+	"kargo-stages/staging": {
+		{Kind: "kargo-stages", Name: "dev", Rel: lens.ViaField, Loaded: true},
+		{Kind: "kargo-stages", Name: "prod", Rel: lens.ViaField, Loaded: true},
+	},
+	"kargo-stages/prod": {
+		{Kind: "kargo-stages", Name: "staging", Rel: lens.ViaField, Loaded: true},
+	},
+	"argocd-apps/payments-web": {
+		{Kind: "argocd-projects", Name: "platform", Rel: lens.ViaField, Loaded: true},
+		{Kind: "pods", Rel: lens.ViaLabel, Loaded: false},
+	},
+	"argocd-apps/checkout-api": {
+		{Kind: "argocd-projects", Name: "platform", Rel: lens.ViaField, Loaded: true},
+	},
+	"argocd-apps/billing-cron": {
+		{Kind: "argocd-projects", Name: "finance", Rel: lens.ViaField, Loaded: true},
+	},
+	"argocd-apps/search-index": {
+		{Kind: "argocd-projects", Name: "data", Rel: lens.ViaField, Loaded: true},
+	},
+	"argocd-projects/platform": {
+		{Kind: "argocd-apps", Name: "payments-web", Rel: lens.ViaField, Loaded: true},
+		{Kind: "argocd-apps", Name: "checkout-api", Rel: lens.ViaField, Loaded: true},
+	},
+	"argocd-projects/finance": {
+		{Kind: "argocd-apps", Name: "billing-cron", Rel: lens.ViaField, Loaded: true},
+	},
+	"argocd-projects/data": {
+		{Kind: "argocd-apps", Name: "search-index", Rel: lens.ViaField, Loaded: true},
+	},
 }
 
 // demoKindForGVR names an edge endpoint as a kind key where one exists, and
