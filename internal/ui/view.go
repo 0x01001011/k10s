@@ -588,6 +588,14 @@ func (m *Model) viewMain(w, h int) Block {
 		}, m.contextBody(inner, h-2))
 	}
 
+	if m.mode == modeTree {
+		closeTag := m.mark("close", brk.Render("[ ")+lipgloss.NewStyle().Background(th.Bg).Foreground(th.Err).Render("close")+brk.Render(" ]"))
+		return Panel(th, PanelOpts{
+			Title: m.treeTitle, Tag: closeTag + brk.Render(" ") + zoomTag,
+			TagPlain: "[ close ] " + zoomPlain, Focused: focused, W: w, H: h,
+		}, m.treeBody(inner, h-2))
+	}
+
 	if m.mode == modeText || m.mode == modeLogs {
 		closeTag := m.mark("close", brk.Render("[ ")+lipgloss.NewStyle().Background(th.Bg).Foreground(th.Err).Render("close")+brk.Render(" ]"))
 		body := m.textBody(inner, h-2)
@@ -721,6 +729,111 @@ func (m *Model) textBody(inner, rows int) []string {
 		}
 	}
 	return out
+}
+
+// treeBody paints the relationship tree.
+//
+// Unlike textBody, which colours a whole line by what it can guess from the
+// text, every run here is painted from severity the WALK already resolved.
+// That is the point of the mode existing: a line reading
+// "po/web-0  x CrashLoopBackOff" should have the failure in red and the spine
+// in grey, not the whole line in one colour chosen by a substring match.
+func (m *Model) treeBody(inner, rows int) []string {
+	th := m.th()
+	out := make([]string, 0, rows)
+
+	if m.treeNote != "" && rows > 2 {
+		out = append(out,
+			padBG(paint(th.Bg, m.treeNoteColor(), false, " "+trunc(m.treeNote, inner-1)), inner, th.Bg),
+			padBG("", inner, th.Bg),
+		)
+		rows -= 2
+	}
+
+	if len(m.treeRows) <= 1 {
+		for _, ln := range treeEmptyHelp {
+			if len(out) >= rows {
+				break
+			}
+			out = append(out, padBG(paint(th.Bg, th.Subtle, false, " "+trunc(ln, inner-1)), inner, th.Bg))
+		}
+		return out
+	}
+
+	end := clamp(m.treeTop+rows, 0, len(m.treeRows))
+	for i := m.treeTop; i < end; i++ {
+		out = append(out, m.treeLine(m.treeRows[i], i == m.treeIdx, inner))
+	}
+	return out
+}
+
+// treeNoteColor grades the header the same way the rows are graded, so the
+// one line an operator reads first is the one that changes colour when
+// something is wrong.
+func (m *Model) treeNoteColor() lipgloss.Color {
+	th := m.th()
+	if strings.Contains(m.treeNote, "need attention") {
+		return th.Warn
+	}
+	return th.Subtle
+}
+
+// treeLine paints one row: spine, identity, status, edge.
+//
+// The name carries the row's worst severity. Scanning names down the left
+// edge is how you find the failure in a tree of forty objects; making that
+// work means the colour has to be on the name, not only on the status cell
+// several columns to its right.
+func (m *Model) treeLine(r treeRow, cursor bool, inner int) string {
+	th := m.th()
+	bg, nameCol := th.Bg, th.Fg
+	switch r.worst {
+	case "error":
+		nameCol = th.Err
+	case "warn":
+		nameCol = th.Warn
+	case "unknown":
+		nameCol = th.Subtle
+	}
+	if cursor {
+		// The selected row takes the selection colours outright. A cursor
+		// that kept per-run colouring would be unreadable against SelBg on
+		// half the themes, and "which row am I on" beats "how bad is this
+		// row" for the one row you are already looking at.
+		bg, nameCol = th.SelBg, th.SelFg
+	}
+
+	var b strings.Builder
+	b.WriteString(paint(bg, bg, false, " "))
+	spine := th.Border
+	if cursor {
+		spine = th.SelFg
+	}
+	b.WriteString(paint(bg, spine, false, r.prefix))
+
+	if r.ref.Name == "" {
+		b.WriteString(paint(bg, th.Subtle, false, r.kind+"   (not loaded — enter opens this kind)"))
+		return padBG(trunc(b.String(), inner), inner, bg)
+	}
+
+	b.WriteString(paint(bg, nameCol, cursor, r.kind+"/"+r.ref.Name))
+	if r.ns != "" {
+		b.WriteString(paint(bg, th.Subtle, false, "  "+r.ns))
+	}
+	for _, c := range r.cells {
+		col := th.Fg
+		if !cursor {
+			col = cellColor(th, c.level, c.text, th.Fg)
+		} else {
+			col = th.SelFg
+		}
+		b.WriteString(paint(bg, th.Subtle, false, "   "))
+		b.WriteString(paint(bg, col, false, c.text))
+	}
+	if r.ref.Rel != "" {
+		b.WriteString(paint(bg, th.Subtle, false, "   via "+r.ref.Rel))
+	}
+	return padBG(trunc(b.String(), inner), inner, bg)
 }
 
 func (m *Model) tableBody(inner, rows int) []string {

@@ -351,16 +351,29 @@ func (m *Model) handleLensAck(msg lensAckMsg) tea.Cmd {
 // tree to expand: a TraefikService that references itself cannot hang a
 // renderer that never recurses.
 func (m *Model) showRelated() tea.Cmd {
+	return m.relatedOf(m.curKind().Key, m.curNamespace(), m.curName())
+}
+
+// relatedOf is showRelated for an object that is NOT the one selected in the
+// table — the node under the tree's cursor. Same panel, same wording; only
+// the subject differs.
+func (m *Model) relatedOf(kind, ns, name string) tea.Cmd {
 	rel, ok := m.src.(domain.Related)
 	if !ok {
 		m.toast = "✗ this backend has no relationships"
 		return nil
 	}
-	kind, ns, name := m.curKind().Key, m.curNamespace(), m.curName()
 	if name == "" || name == "-" {
 		return nil
 	}
-	title := "related " + m.curKind().Short + "/" + name
+	short := kind
+	for _, k := range m.kinds() {
+		if k.Key == kind && k.Short != "" {
+			short = k.Short
+			break
+		}
+	}
+	title := "related " + short + "/" + name
 	return m.runFetch(title, func() (string, error) {
 		refs, err := rel.Related(kind, ns, name)
 		if err != nil {

@@ -117,14 +117,30 @@ nothing greyed out.
 | `o` | Cordon / **Uncordon** (label follows state) | nodes                                 |
 | `u` | **Drain** — confirm modal, cordons + evicts | nodes                                 |
 | `D` | **Delete** — red confirm modal              | most                                  |
-| `R` | Related — one hop out, both directions      | kinds a lens pack covers              |
-| `X` | Tree — three hops, drawn, statuses inline   | kinds a lens pack covers              |
+| `R` | Related — one hop out, both directions      | anything with declared edges          |
+| `X` | Tree — three hops, drawn, statuses inline   | anything with declared edges          |
 
 `R` answers "what is next to this". `X` answers "what is the whole thing, and
-where in it is the failure" — the Kargo pipeline (warehouse → stage → stage)
-or the ArgoCD fan-out (appproject → applications → workloads) in one frame.
-Neither starts a watch, so a kind nobody has opened reads as *not loaded*
-rather than opening itself. See [lenses.md](lenses.md).
+where in it is the failure": a pod with its ReplicaSet, Deployment, ConfigMap,
+Secrets and node, or a Kargo pipeline, or an ArgoCD fan-out — in one frame,
+each line carrying that object's own status. Neither starts a watch, so a kind
+nobody has opened reads as *not loaded* rather than opening itself.
+
+## Tree (`X`)
+
+| Key     | Action                                                        |
+|---------|---------------------------------------------------------------|
+| `↑` `↓` | move the cursor (the wheel moves it too)                       |
+| `enter` | go to that object — its table, its namespace, its row selected |
+| `X`     | re-root the walk on the object under the cursor                |
+| `R`     | one hop from the object under the cursor, in the text panel    |
+| `esc`   | close                                                          |
+
+Enter is the point: the tree does not reimplement describe, logs, exec or
+delete — it puts you on the row where all of them already work. `X` on the
+cursor is why three hops is enough; the walk follows you rather than having to
+be widened. Everything else — `:commands`, the palette, `ctrl+y`, the theme
+keys — keeps working while the tree is open. See [lenses.md](lenses.md).
 
 Confirm modals: `enter`/`y` confirm · `esc`/`n` cancel.
 

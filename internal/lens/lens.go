@@ -286,8 +286,14 @@ func (p Pack) validate() error {
 			return fmt.Errorf("lens %q: %w", p.Name, err)
 		}
 	}
-	if len(p.Kinds) == 0 {
-		return fmt.Errorf("lens %q: declares no kinds", p.Name)
+	// A pack must add SOMETHING. Kinds are the usual something, but edges
+	// alone are legitimate and were the case this rule used to forbid: the
+	// relationships between kinds k10s ALREADY serves — a pod to the
+	// ReplicaSet that owns it, a PVC to its PV — belong to no operator and
+	// introduce no new table. Requiring a kind there would mean inventing a
+	// duplicate view of Pods purely to hang an edge off it.
+	if len(p.Kinds) == 0 && len(p.Edges) == 0 {
+		return fmt.Errorf("lens %q: declares neither kinds nor edges", p.Name)
 	}
 	seen := map[string]bool{}
 	for _, k := range p.Kinds {
@@ -429,10 +435,27 @@ func ParseGVR(s string) (group, version, resource string, err error) {
 	return group, version, resource, nil
 }
 
+// validGroupVersion accepts what DISCOVERY reports, which for the core group
+// is a bare version.
+//
+// Discovery's GroupVersion string is "v1" for core and "apps/v1" for
+// everything else, and the gate compares against that map verbatim — so a
+// pack requiring the core group has to write "v1", and rejecting it here
+// made core relationships undeclarable. ParseGVR already takes the core form
+// the same way, for the same reason.
 func validGroupVersion(s string) error {
 	parts := strings.Split(s, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return errors.New(`want "group/version"`)
+	switch len(parts) {
+	case 1:
+		if parts[0] == "" {
+			return errors.New(`want "group/version" or "version" for the core group`)
+		}
+	case 2:
+		if parts[0] == "" || parts[1] == "" {
+			return errors.New(`want "group/version"`)
+		}
+	default:
+		return errors.New(`want "group/version" or "version" for the core group`)
 	}
 	return nil
 }

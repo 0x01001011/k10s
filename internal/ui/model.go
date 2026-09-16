@@ -61,6 +61,12 @@ const (
 	modeLogs
 	modeContexts
 	modeShell
+	// modeTree is its own mode rather than a shape of modeText because it is
+	// ADDRESSABLE: the cursor names an object, Enter goes there, X re-roots
+	// the walk on it. A text panel can only be scrolled, and it paints one
+	// colour per line — which would throw away the severity the walk already
+	// resolved for every cell.
+	modeTree
 )
 
 type promptMode int
@@ -141,6 +147,15 @@ type Model struct {
 	textTitle string
 	textLines []string
 	textTop   int
+
+	// The tree panel. Rows are flattened once when the walk lands; the
+	// cursor and the viewport then index into them, so no keystroke re-walks
+	// anything.
+	treeTitle string
+	treeNote  string
+	treeRows  []treeRow
+	treeIdx   int
+	treeTop   int
 
 	zoomed  bool
 	confirm *confirmState
@@ -992,6 +1007,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showText(msg.title, msg.body)
 		return m, nil
 
+	case treeResultMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.toast = "✗ " + msg.err.Error()
+			return m, nil
+		}
+		m.showTreeRows(msg.title, msg.note, msg.rows)
+		return m, nil
+
 	case exportDoneMsg:
 		m.busy = false
 		if msg.err != nil {
@@ -1563,6 +1587,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	// The tree owns its own movement and its own Enter. It is intercepted
+	// here rather than folded into the switch below because those keys mean
+	// something else on a table, and a tree that scrolled the table under it
+	// would be worse than no tree.
+	if m.mode == modeTree && m.focus == focusMain {
+		if cmd, handled := m.treeKey(key); handled {
+			return cmd
+		}
+	}
+
 	switch key {
 	case "q":
 		return tea.Quit
@@ -1612,7 +1646,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.toast = map[bool]string{true: "zoomed", false: "restored"}[m.zoomed]
 	case "esc":
 		switch {
-		case m.mode == modeText || m.mode == modeLogs || m.mode == modeContexts:
+		case m.mode == modeText || m.mode == modeLogs || m.mode == modeContexts || m.mode == modeTree:
 			m.backToTable()
 		case m.zoomed:
 			m.setZoomed(false)
@@ -1661,6 +1695,53 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// treeKey handles the keys the tree claims, reporting whether it claimed one.
+//
+// Unclaimed keys fall through untouched, which is what keeps :commands, theme
+// switching, the palette and ctrl+y working while the tree is open — the tree
+// is a view of the cluster, not a modal that takes the terminal hostage.
+func (m *Model) treeKey(key string) (tea.Cmd, bool) {
+	switch key {
+	case "up":
+		m.treeMove(-1)
+	case "down":
+		m.treeMove(1)
+	case "pgup", "ctrl+b":
+		m.treeMove(-maxi(1, m.treeVisible()))
+	case "pgdown", "ctrl+f":
+		m.treeMove(maxi(1, m.treeVisible()))
+	case "home", "g":
+		m.treeMove(-1 << 20)
+	case "end", "G":
+		m.treeMove(1 << 20)
+	case "enter":
+		if r := m.treeCur(); r != nil {
+			m.focusRef(r.ref)
+		}
+	case "X":
+		// Re-root on the node under the cursor. This is why three hops is
+		// enough: the walk follows you instead of you widening it.
+		r := m.treeCur()
+		if r == nil || r.ref.Name == "" {
+			m.toast = "✗ nothing to walk from here"
+			return nil, true
+		}
+		return m.treeFrom(r.ref.Kind, r.ref.Namespace, r.ref.Name), true
+	case "R":
+		// One hop from the node under the cursor, in the text panel. The
+		// tree answers "what is the shape"; R still answers "exactly what
+		// does this one touch, and via which edge".
+		r := m.treeCur()
+		if r == nil || r.ref.Name == "" {
+			return nil, true
+		}
+		return m.relatedOf(r.ref.Kind, r.ref.Namespace, r.ref.Name), true
+	default:
+		return nil, false
+	}
+	return nil, true
 }
 
 // openPrompt focuses the command box, optionally seeding it. The two
@@ -1783,6 +1864,13 @@ func (m *Model) scrollMain(delta int) {
 	}
 	if m.mode == modeText {
 		m.textTop = clamp(m.textTop+delta, 0, maxi(0, len(m.textLines)-(m.layout().midH-2)))
+		return
+	}
+	if m.mode == modeTree {
+		// The wheel moves the CURSOR, not just the viewport. In a panel whose
+		// selection is the thing you act on, scrolling the highlight out of
+		// sight and then pressing Enter would act on something off-screen.
+		m.treeMove(delta)
 		return
 	}
 	_, rows := m.tableData()
@@ -2322,6 +2410,137 @@ func (m *Model) showText(title, body string) {
 	m.textTop = 0
 	m.focus = focusMain
 	m.toast = title
+}
+
+// showTreeRows opens the tree panel on a finished walk.
+//
+// The cursor starts on row 1 rather than 0 when there is one: row 0 is the
+// object you already had selected, and starting there would make the first
+// arrow press the only useful one.
+func (m *Model) showTreeRows(title, note string, rows []treeRow) {
+	if m.logStop != nil {
+		m.logStop()
+		m.logStop = nil
+	}
+	m.mode = modeTree
+	m.treeTitle = title
+	m.treeNote = note
+	m.treeRows = rows
+	m.treeIdx = 0
+	if len(rows) > 1 {
+		m.treeIdx = 1
+	}
+	m.treeTop = 0
+	m.focus = focusMain
+	m.toast = title
+}
+
+// treeCur is the row under the cursor, or nil when the tree is empty.
+func (m *Model) treeCur() *treeRow {
+	if m.mode != modeTree || m.treeIdx < 0 || m.treeIdx >= len(m.treeRows) {
+		return nil
+	}
+	return &m.treeRows[m.treeIdx]
+}
+
+// treeMove walks the cursor and keeps it inside the viewport.
+func (m *Model) treeMove(delta int) {
+	if len(m.treeRows) == 0 {
+		return
+	}
+	m.treeIdx = clamp(m.treeIdx+delta, 0, len(m.treeRows)-1)
+	rows := maxi(1, m.treeVisible())
+	switch {
+	case m.treeIdx < m.treeTop:
+		m.treeTop = m.treeIdx
+	case m.treeIdx >= m.treeTop+rows:
+		m.treeTop = m.treeIdx - rows + 1
+	}
+	m.treeTop = clamp(m.treeTop, 0, maxi(0, len(m.treeRows)-rows))
+}
+
+// treeVisible is how many tree lines fit, after the panel frame and the note.
+func (m *Model) treeVisible() int {
+	rows := m.layout().midH - 2
+	if m.treeNote != "" {
+		rows -= 2
+	}
+	return maxi(0, rows)
+}
+
+// focusRef is what Enter does in the tree: leave for the object under the
+// cursor, on its own table, with it selected.
+//
+// This is the whole "and then what" of a relationship view. Reading that a
+// pod's ConfigMap is missing is half an answer; being one keystroke from the
+// ConfigMaps table with that row highlighted is the other half — and every
+// action k10s has then applies, without the tree having to reimplement any
+// of them.
+func (m *Model) focusRef(r domain.Ref) {
+	if r.Name == "" {
+		// The endpoint is a kind nobody has opened. Going there is still the
+		// right move — it starts the informer, which is exactly what "open
+		// this kind to resolve" asks for.
+		if r.Kind != "" && m.hasKind(r.Kind) {
+			m.gotoKind(r.Kind, "")
+			return
+		}
+		m.toast = "✗ no view for " + r.Kind
+		return
+	}
+	if !m.hasKind(r.Kind) {
+		m.toast = "✗ no view for " + r.Kind
+		return
+	}
+	// The namespace moves with the object. A tree crosses namespaces —
+	// an ArgoCD Application in argocd owns workloads everywhere — so
+	// arriving at the right table in the wrong namespace would land on an
+	// empty view and look like the object had vanished.
+	if r.Namespace != "" && r.Namespace != m.namespace && m.isNamespace(r.Namespace) {
+		m.namespace = r.Namespace
+		m.saveConfig()
+	}
+	m.jumpToResource(r.Kind)
+	m.backToTable()
+	m.rowSearch = ""
+	m.selectRowNamed(r.Namespace, r.Name)
+	m.toast = "→ " + m.curKind().Short + "/" + r.Name
+}
+
+// hasKind reports whether a kind key has a table to go to. An edge may name a
+// GVR no kind serves — Longhorn's replicas and engines are edge endpoints
+// nobody browses — and those are reported rather than navigated to.
+func (m *Model) hasKind(key string) bool {
+	for _, k := range m.kinds() {
+		if k.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// selectRowNamed puts the cursor on a named row of the table now on screen,
+// and anchors it so the next reorder keeps it there.
+func (m *Model) selectRowNamed(ns, name string) {
+	cols, rows := m.tableData()
+	id := rowIdentity(m, cols)
+	want := ns
+	if id.nsIdx < 0 {
+		// The table is already scoped to one namespace and its rows carry
+		// none, so comparing one would never match. Same rule the tree's own
+		// status lookup follows.
+		want = ""
+	}
+	for i, row := range rows {
+		if !id.is(row, want, name) {
+			continue
+		}
+		m.rowIdx = i
+		m.rowMem[m.curKind().Key] = i
+		m.syncScroll()
+		m.anchorRow()
+		return
+	}
 }
 
 func (m *Model) closePrompt() {

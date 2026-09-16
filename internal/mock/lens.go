@@ -296,6 +296,46 @@ func (s *Source) Related(kind, ns, name string) ([]domain.Ref, error) {
 // it models rows rather than object bodies; writing both halves here keeps
 // what the demo shows identical to what a cluster shows.
 var demoRelated = map[string][]domain.Ref{
+	// The core chain, on the pod that is actually broken. This is the demo of
+	// core.yaml: CrashLoopBackOff at the top, the ReplicaSet and Deployment
+	// that own it, the ConfigMap and Secrets it reads, and the node it landed
+	// on — the five places you would otherwise visit by hand, in one frame.
+	//
+	// The names are the ones data.go already ships, so the tree agrees with
+	// every table you can open from it.
+	"pods/billing-worker-6f8d9c5b7-qq91x": {
+		{Kind: "replicasets", Name: "billing-worker-6f8d9c5b7", Rel: lens.ViaOwnerRef, Loaded: true},
+		{Kind: "configmaps", Name: "feature-flags", Rel: lens.ViaField, Loaded: true},
+		{Kind: "secrets", Name: "db-credentials", Rel: lens.ViaField, Loaded: true},
+		{Kind: "secrets", Name: "ghcr-pull", Rel: lens.ViaField, Loaded: true},
+		{Kind: "nodes", Name: "ip-10-0-2-88", Rel: lens.ViaField, Loaded: true},
+	},
+	"replicasets/billing-worker-6f8d9c5b7": {
+		{Kind: "deployments", Name: "billing-worker", Rel: lens.ViaOwnerRef, Loaded: true},
+		{Kind: "pods", Name: "billing-worker-6f8d9c5b7-qq91x", Rel: lens.ViaOwnerRef, Loaded: true},
+	},
+	"deployments/billing-worker": {
+		{Kind: "replicasets", Name: "billing-worker-6f8d9c5b7", Rel: lens.ViaOwnerRef, Loaded: true},
+	},
+
+	// The healthy counterpart, so the demo also shows what "nothing wrong
+	// here" looks like — and so the first row of the Pods table is not an
+	// empty tree.
+	"pods/api-gateway-7d9f4c8b6d-2xk4p": {
+		{Kind: "replicasets", Name: "api-gateway-7d9f4c8b6d", Rel: lens.ViaOwnerRef, Loaded: true},
+		{Kind: "configmaps", Name: "api-gateway-config", Rel: lens.ViaField, Loaded: true},
+		{Kind: "serviceaccounts", Name: "api-gateway", Rel: lens.ViaField, Loaded: true},
+		{Kind: "nodes", Name: "ip-10-0-2-88", Rel: lens.ViaField, Loaded: true},
+	},
+	"replicasets/api-gateway-7d9f4c8b6d": {
+		{Kind: "deployments", Name: "api-gateway", Rel: lens.ViaOwnerRef, Loaded: true},
+		{Kind: "pods", Name: "api-gateway-7d9f4c8b6d-2xk4p", Rel: lens.ViaOwnerRef, Loaded: true},
+		{Kind: "pods", Name: "api-gateway-7d9f4c8b6d-hv8qz", Rel: lens.ViaOwnerRef, Loaded: true},
+	},
+	"deployments/api-gateway": {
+		{Kind: "replicasets", Name: "api-gateway-7d9f4c8b6d", Rel: lens.ViaOwnerRef, Loaded: true},
+	},
+
 	"kargo-stages/dev": {
 		{Kind: "kargo-warehouses", Rel: lens.ViaField, Loaded: false},
 		{Kind: "kargo-stages", Name: "staging", Rel: lens.ViaField, Loaded: true},

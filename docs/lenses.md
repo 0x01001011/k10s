@@ -272,8 +272,51 @@ listed and marked *not loaded*: that is a different answer from "does not
 exist", and only one of them is fixed by opening that kind.
 
 **`X` shows the shape.** The same edges, walked three hops, drawn as a tree,
-with each object's own graded cells beside it. `R` answers "what is next to
-this"; `X` answers "what is the whole thing, and where in it is the failure":
+with each object's own graded cells beside it and a header counting what needs
+attention. `R` answers "what is next to this"; `X` answers "what is the whole
+thing, and where in it is the failure":
+
+```
+2 of 7 need attention
+
+po/billing-worker-6f8d9c5b7-qq91x   ! 0/1   x CrashLoopBackOff
+├─ cm/feature-flags   via field
+├─ no/ip-10-0-2-88   via field
+├─ rs/billing-worker-6f8d9c5b7   via ownerRef
+│  └─ deploy/billing-worker   ! 0/1   via ownerRef
+├─ sec/db-credentials   via field
+└─ sec/ghcr-pull   via field
+```
+
+That is five tables in one frame, and it needs no operator installed. The
+**core pack** (`builtin/core.yaml`) declares the relationships between the
+kinds k10s already serves, gated on `v1`, `apps/v1` and `batch/v1` — the three
+groups every cluster has. Ownership walks pod → replicaset → deployment (two
+hops, because that is how Kubernetes models it, and because two ReplicaSets
+mid-rollout answer most rollout questions on sight), plus the direct
+StatefulSet, DaemonSet and Job/CronJob chains. Storage walks pod → claim →
+volume. Configuration covers every field a ConfigMap or Secret can reach a pod
+through — volumes, `envFrom`, and `imagePullSecrets`, the one that explains
+`ImagePullBackOff`. Placement is `.spec.nodeName`, which an unscheduled pod
+does not have, and that absence is itself the answer.
+
+Core declares **no kinds at all**, which a pack was previously required to do.
+Requiring one here would mean inventing a duplicate view of Pods purely to
+hang an edge off it, and putting two entries in the sidebar for one resource.
+
+Ingress routing lives in `builtin/core-net.yaml` rather than in core, for one
+reason: `requires` gates a pack whole, so folding `networking.k8s.io/v1` into
+core would cost a cluster without it the pod-to-ReplicaSet edge as well. One
+group per gate keeps a missing API costing only what depends on it.
+
+Two edges are deliberately **not** declared, and their absence is asserted by a
+test so nobody later reads the gap as an oversight. A Service selects pods with
+a label *selector* — a map matched as a set — which `via: label` cannot
+express; an edge that silently resolved nothing would make every Service look
+like it routed nowhere. Endpoints share their Service's name by convention
+rather than by any reference, and EndpointSlice already broke that convention.
+
+The operator packs add their own shapes on top:
 
 ```
 kargo-stages/dev   + Healthy  ! Running
@@ -312,6 +355,24 @@ Nothing here starts a watch. The walk reads informer caches that are already
 running, which is why an unopened kind renders as *not loaded* rather than
 quietly opening itself — resolving a relationship must not subscribe the
 operator to a kind they did not ask for.
+
+**The tree is a place to act from, not a page to read.** It has its own
+cursor. `enter` goes to the object under it — its table, its namespace, its
+row selected — so describe, logs, exec, delete and every lens verb apply
+without the tree reimplementing any of them. `X` re-roots the walk on the
+cursor, which is why three hops is enough: the walk follows you rather than
+having to be widened. `R` gives that object's single hop in the text panel.
+Keys the tree does not claim fall through untouched, so `:commands`, the
+palette, `ctrl+y` and the theme keys keep working while it is open.
+
+Colour comes from the severity the walk already resolved, per run rather than
+per line: the spine is border-grey, the status cell takes its own level's
+colour, and the object's NAME takes its **worst** cell — so a failure is
+findable by scanning names down the left edge rather than by reading a status
+column forty lines deep. Worst, not first: an Application that is `Synced` and
+`Degraded` is a failing Application, and colouring by the first column would
+paint it green. Glyphs (`+ ! x ?`) carry the same information for a
+colour-blind operator and a low-contrast terminal, exactly as in the table.
 
 Waiting is visible. An action declaring `ack` spins in the pane until the
 controller echoes the token back into that field. Timing out is reported as

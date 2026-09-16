@@ -18,7 +18,7 @@ func IsAsyncMsg(msg tea.Msg) bool {
 	// lensDoneMsg is the write's own result and resolves once. lensAckMsg is
 	// deliberately NOT here: it reschedules itself until the controller
 	// answers, so chasing it headlessly would loop for the whole timeout.
-	case textResultMsg, actionResultMsg, srcConnectedMsg, ctxSwitchMsg, logStartMsg, logOlderMsg, shellStartMsg, editFetchedMsg, editExitMsg, portForwardMsg, updateCheckMsg, updateAppliedMsg, lensDoneMsg, exportDoneMsg:
+	case textResultMsg, treeResultMsg, actionResultMsg, srcConnectedMsg, ctxSwitchMsg, logStartMsg, logOlderMsg, shellStartMsg, editFetchedMsg, editExitMsg, portForwardMsg, updateCheckMsg, updateAppliedMsg, lensDoneMsg, exportDoneMsg:
 		return true
 	}
 	return false
@@ -37,6 +37,19 @@ type tickMsg struct{}
 type textResultMsg struct {
 	title string
 	body  string
+	err   error
+}
+
+// treeResultMsg lands after an async relationship walk.
+//
+// It carries rows rather than a rendered string because the tree panel is
+// interactive: the cursor addresses a row, Enter navigates to the object that
+// row names, and both need the domain.Ref that produced the line rather than
+// the line itself.
+type treeResultMsg struct {
+	title string
+	rows  []treeRow
+	note  string
 	err   error
 }
 

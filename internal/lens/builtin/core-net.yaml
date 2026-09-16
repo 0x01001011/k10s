@@ -1,0 +1,31 @@
+# core-net — ingress routing, split from core.yaml for one reason.
+#
+# `requires` gates a pack whole. Folding these two edges into core.yaml would
+# mean listing networking.k8s.io/v1 there, and a cluster that did not serve
+# it would lose the pod-to-ReplicaSet edge along with them — an unrelated
+# regression caused by an unrelated group. One group per gate keeps a missing
+# API costing only what actually depends on it.
+#
+# An Ingress names its backend Services by FIELD, which is expressible —
+# unlike the Service's own pod selector, which is not. See core.yaml.
+#
+# Ingress -> Pod is not declared: it is two hops through a Service, and the
+# tree walks those by itself. Declaring the shortcut would draw the same pods
+# twice, once under the Service and once under the Ingress.
+name: core-net
+requires:
+  - networking.k8s.io/v1
+
+edges:
+  - from: networking.k8s.io/v1/ingresses
+    to: v1/services
+    via: field
+    key: .spec.rules[*].http.paths[*].backend.service.name
+
+  # defaultBackend is a separate field from the rules, and an Ingress with
+  # only a default backend and no rules at all is common enough that reading
+  # just the rules would leave it looking like it routed nowhere.
+  - from: networking.k8s.io/v1/ingresses
+    to: v1/services
+    via: field
+    key: .spec.defaultBackend.service.name

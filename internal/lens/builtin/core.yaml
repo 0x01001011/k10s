@@ -1,0 +1,132 @@
+# core — the relationships between kinds k10s already serves.
+#
+# Every other pack in this directory belongs to an operator and is gated on
+# that operator's CRDs. This one belongs to Kubernetes, declares no kinds of
+# its own, and is gated on the three API groups every cluster serves — so it
+# is always on, and X works on a pod in a cluster with no operators at all.
+#
+# Kinds are deliberately absent. These edges connect Pods, ReplicaSets,
+# Deployments, PVCs and the rest, all of which k10s already has tables for;
+# declaring a second view of Pods purely to hang an edge off it would put two
+# entries in the sidebar for one resource.
+#
+# `requires` gates the WHOLE pack, which is why this list is v1, apps/v1 and
+# batch/v1 and nothing else: adding an optional group here would switch the
+# pod-to-ReplicaSet edge off on a cluster that happens not to serve it. Edges
+# needing another group go in their own pack, gated separately — see
+# core-net.yaml.
+#
+# WHAT IS NOT HERE, and why:
+#
+#   * Service -> Pod. A Service selects pods with a label SELECTOR — a map of
+#     key/value pairs matched as a set. `via: label` reads ONE key off the
+#     object and matches its value verbatim, so it cannot express a selector.
+#     An edge that silently resolved nothing would read as "this Service
+#     routes to no pods", which is the most alarming thing a Service view
+#     could wrongly say.
+#   * Endpoints -> Service. They share a name by convention, not by any field
+#     or ownerReference, and a convention is not a reference: EndpointSlice
+#     already broke it, and matching on name alone would connect unrelated
+#     objects that merely agree.
+#   * HorizontalPodAutoscaler -> Deployment. scaleTargetRef is served under
+#     autoscaling/v1 or /v2 depending on the cluster, so it cannot be gated
+#     without gating everything above it too.
+name: core
+requires:
+  - v1
+  - apps/v1
+  - batch/v1
+
+edges:
+  # ---- ownership ---------------------------------------------------------
+  #
+  # The chain every "why is this pod unhealthy" question walks up:
+  # pod -> replicaset -> deployment. Two hops rather than one, because that
+  # is how Kubernetes models it and because the intermediate ReplicaSet is
+  # exactly what you need during a rollout — two of them, one scaling up and
+  # one scaling down, answers most rollout questions on sight.
+  - from: v1/pods
+    to: apps/v1/replicasets
+    via: ownerRef
+  - from: apps/v1/replicasets
+    to: apps/v1/deployments
+    via: ownerRef
+
+  # StatefulSets and DaemonSets own their pods directly — no intermediate
+  # object — so these are one hop, not two.
+  - from: v1/pods
+    to: apps/v1/statefulsets
+    via: ownerRef
+  - from: v1/pods
+    to: apps/v1/daemonsets
+    via: ownerRef
+
+  - from: v1/pods
+    to: batch/v1/jobs
+    via: ownerRef
+  - from: batch/v1/jobs
+    to: batch/v1/cronjobs
+    via: ownerRef
+
+  # ---- storage -----------------------------------------------------------
+  #
+  # A pod stuck Pending is usually waiting on a volume, and the answer is two
+  # hops away: which claim, and is it bound. The wildcard matters — a pod
+  # with several volumes must list all of its claims, and only the ones that
+  # ARE claims. An emptyDir or a projected volume has no claimName, and
+  # AllowMissingKeys skips it rather than yielding a blank.
+  - from: v1/pods
+    to: v1/persistentvolumeclaims
+    via: field
+    key: .spec.volumes[*].persistentVolumeClaim.claimName
+  - from: v1/persistentvolumeclaims
+    to: v1/persistentvolumes
+    via: field
+    key: .spec.volumeName
+
+  # ---- placement ---------------------------------------------------------
+  #
+  # .spec.nodeName is written by the scheduler, so an unscheduled pod
+  # resolves to nothing here — which is itself the answer. Read backwards it
+  # is "what is running on this node", which is the question during a drain.
+  - from: v1/pods
+    to: v1/nodes
+    via: field
+    key: .spec.nodeName
+
+  # ---- configuration -----------------------------------------------------
+  #
+  # CreateContainerConfigError names the missing ConfigMap or Secret in the
+  # pod's events and nowhere else. These edges put it on the tree instead,
+  # carrying whatever that object's own row says about it.
+  #
+  # Volumes and envFrom are separate paths because they are separate fields:
+  # a pod may mount a ConfigMap, consume another as environment, or both.
+  - from: v1/pods
+    to: v1/configmaps
+    via: field
+    key: .spec.volumes[*].configMap.name
+  - from: v1/pods
+    to: v1/configmaps
+    via: field
+    key: .spec.containers[*].envFrom[*].configMapRef.name
+  - from: v1/pods
+    to: v1/secrets
+    via: field
+    key: .spec.volumes[*].secret.secretName
+  - from: v1/pods
+    to: v1/secrets
+    via: field
+    key: .spec.containers[*].envFrom[*].secretRef.name
+
+  # imagePullSecrets is the one that explains ImagePullBackOff, and it is a
+  # list of {name} rather than a bare string.
+  - from: v1/pods
+    to: v1/secrets
+    via: field
+    key: .spec.imagePullSecrets[*].name
+
+  - from: v1/pods
+    to: v1/serviceaccounts
+    via: field
+    key: .spec.serviceAccountName
