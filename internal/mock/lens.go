@@ -175,16 +175,66 @@ func (s *Source) LensActions(kind, ns, name, selected string) []domain.LensActio
 		}
 		spec := domain.LensActionSpec{
 			ID: a.ID, Label: a.Label, Confirm: a.Confirm,
-			Notice: a.Notice, AckPath: a.Ack,
+			Notice: a.Notice, AckPath: a.Ack, ConfirmValue: a.ConfirmValue,
 			Kubectl: lens.Kubectl(a, resourceOf(k), ns, name, v),
+			Params:  demoParamSpecs(a, name),
 		}
-		if err := a.Check(v); err != nil {
+		// CheckReady, not Check: an unfilled parameter opens the form, it does
+		// not disable the button.
+		if err := a.CheckReady(v); err != nil {
 			spec.Disabled, spec.DisabledWhy = true, err.Error()
 			spec.NeedsSelection = errors.Is(err, lens.ErrSelectedRequired)
 		}
 		out = append(out, spec)
 	}
 	return out
+}
+
+// demoParamSpecs carries an action's parameters into the demo.
+//
+// A live optionsFrom has nothing to read offline, so its suggestions come from
+// demoLensOptions — a fixture keyed by kind and parameter. Inventing them from
+// the pack would make the demo claim a cluster shape it cannot show, and
+// leaving them empty would make the form look broken in every screenshot.
+func demoParamSpecs(a lens.Action, name string) []domain.LensParamSpec {
+	if len(a.Params) == 0 {
+		return nil
+	}
+	out := make([]domain.LensParamSpec, 0, len(a.Params))
+	for _, p := range a.Params {
+		spec := domain.LensParamSpec{
+			Name: p.Name, Label: p.Label, Type: p.Type, Default: p.Default,
+			AllowFree: p.AllowFree, Required: p.Required,
+		}
+		if spec.Label == "" {
+			spec.Label = p.Name
+		}
+		for _, o := range p.Options {
+			spec.Options = append(spec.Options, domain.LensOption{Value: o.Value, Note: o.Note})
+		}
+		if p.OptionsFrom != "" {
+			spec.Options = append(spec.Options, demoLensOptions(p.OptionsFrom, name)...)
+		}
+		out = append(out, spec)
+	}
+	return out
+}
+
+// demoLensOptions fakes one live option source.
+//
+// Instance names are derived from the row's own name because that is how CNPG
+// names them — "<cluster>-1", "<cluster>-2" — so the demo teaches the real
+// convention rather than a set of invented strings.
+func demoLensOptions(source, name string) []domain.LensOption {
+	switch source {
+	case ".status.instanceNames":
+		return []domain.LensOption{
+			{Value: name + "-1", Note: "primary"},
+			{Value: name + "-2", Note: "replica"},
+			{Value: name + "-3", Note: "replica"},
+		}
+	}
+	return nil
 }
 
 // resourceOf is the plural the kubectl line needs, taken off the declared
@@ -196,7 +246,7 @@ func resourceOf(k lens.Kind) string {
 
 // LensAction pretends to write, and hands back a token so the demo shows
 // the same acknowledgement wait a real controller produces.
-func (s *Source) LensAction(kind, ns, name, id, selected string) (string, error) {
+func (s *Source) LensAction(kind, ns, name, id, selected string, params map[string]string) (string, error) {
 	p, _, ok := lensKindOf(kind)
 	if !ok {
 		return "", fmt.Errorf("unknown kind %q", kind)
@@ -204,6 +254,16 @@ func (s *Source) LensAction(kind, ns, name, id, selected string) (string, error)
 	a, ok := p.Action(id)
 	if !ok {
 		return "", fmt.Errorf("lens %q has no action %q", p.Name, id)
+	}
+	// The demo refuses what the real backend refuses. A form that submits
+	// happily here and is rejected against a cluster teaches the wrong thing
+	// about the gate.
+	v := a.Fill(lens.Vars{
+		Name: name, Namespace: ns, Context: contexts[s.ctxIdx],
+		Now: time.Now().UTC().Format(time.RFC3339), Selected: selected, Params: params,
+	})
+	if err := a.Check(v); err != nil {
+		return "", err
 	}
 	if a.Ack == "" {
 		return "", nil
@@ -218,6 +278,22 @@ func (s *Source) LensAction(kind, ns, name, id, selected string) (string, error)
 	s.lensAcks[tok] = time.Now().Add(2500 * time.Millisecond)
 	s.mu.Unlock()
 	return tok, nil
+}
+
+// LensPreview renders the command for the parameters currently in the form.
+func (s *Source) LensPreview(kind, ns, name, id, selected string, params map[string]string) string {
+	p, k, ok := lensKindOf(kind)
+	if !ok {
+		return ""
+	}
+	a, ok := p.Action(id)
+	if !ok {
+		return ""
+	}
+	return lens.Kubectl(a, resourceOf(k), ns, name, lens.Vars{
+		Name: name, Namespace: ns, Context: contexts[s.ctxIdx],
+		Now: time.Now().UTC().Format(time.RFC3339), Selected: selected, Params: params,
+	})
 }
 
 // LensAck reports the pretend controller as done once its delay has passed.

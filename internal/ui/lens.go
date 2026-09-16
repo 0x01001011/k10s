@@ -157,7 +157,7 @@ func (m *Model) fireLensAction(sp domain.LensActionSpec) tea.Cmd {
 		return nil
 	}
 
-	run := func(mm *Model) tea.Cmd { return mm.runLensAction(kind, ns, name, short, sp) }
+	run := func(mm *Model) tea.Cmd { return mm.runLensAction(kind, ns, name, short, sp, nil) }
 
 	switch sp.Confirm {
 	case "typed":
@@ -226,7 +226,7 @@ func wrapNotice(s string, width int) []string {
 
 // runLensAction performs the write, then starts waiting for the controller
 // if the action declares an acknowledgement field.
-func (m *Model) runLensAction(kind, ns, name, short string, sp domain.LensActionSpec) tea.Cmd {
+func (m *Model) runLensAction(kind, ns, name, short string, sp domain.LensActionSpec, params map[string]string) tea.Cmd {
 	lv, ok := m.src.(domain.LensVerbs)
 	if !ok {
 		return nil
@@ -237,7 +237,7 @@ func (m *Model) runLensAction(kind, ns, name, short string, sp domain.LensAction
 	seq := m.lensSeq
 	m.startBusy(label)
 	return func() tea.Msg {
-		ack, err := lv.LensAction(kind, ns, name, sp.ID, sel)
+		ack, err := lv.LensAction(kind, ns, name, sp.ID, sel, params)
 		return lensDoneMsg{
 			kind: kind, ns: ns, name: name,
 			id: sp.ID, label: label, seq: seq,

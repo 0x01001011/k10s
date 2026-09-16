@@ -121,6 +121,19 @@ func RenderTree(node any, v Vars) (any, error) {
 	}
 }
 
+// CheckReady reports why an action cannot even be OFFERED, or nil.
+//
+// It is deliberately narrower than Check: an unfilled parameter is not a
+// reason to grey out the button, it is the reason the button opens a form.
+// Disabling on it would make every parameterised action permanently
+// unreachable, since nothing can fill a form that never opens.
+func (a Action) CheckReady(v Vars) error {
+	if a.RequiresSelection && v.Selected == "" {
+		return ErrSelectedRequired
+	}
+	return nil
+}
+
 // Check reports why an action cannot run right now, or nil.
 //
 // Parameters are checked here rather than only in the form, because the form
@@ -128,8 +141,8 @@ func RenderTree(node any, v Vars) (any, error) {
 // nothing to ask, and a pack edited to add a required param must not turn that
 // into a write with an empty value.
 func (a Action) Check(v Vars) error {
-	if a.RequiresSelection && v.Selected == "" {
-		return ErrSelectedRequired
+	if err := a.CheckReady(v); err != nil {
+		return err
 	}
 	for _, p := range a.Params {
 		val := v.Params[p.Name]

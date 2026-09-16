@@ -192,7 +192,7 @@ func TestLensVerbPatchUsesMergePatch(t *testing.T) {
 		app("default", "my-app", "OutOfSync", "Healthy"))
 	syncStore(t, s, "argocd-apps")
 
-	if _, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", ""); err != nil {
+	if _, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", "", nil); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))
@@ -223,7 +223,7 @@ func TestLensVerbStatusPatchTargetsTheStatusSubresource(t *testing.T) {
 	s := lensStoreWithPack(t, cnpgLikePack, cnpgGVR, "ClusterList", cnpgCluster("data", "my-db"))
 	syncStore(t, s, "cl-clusters")
 
-	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", "my-db-2"); err != nil {
+	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", "my-db-2", nil); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))
@@ -277,7 +277,7 @@ func TestLensActionRefusesWhenAPreconditionHolds(t *testing.T) {
 	s := newTestStoreWithLenses(t, []string{"argoproj.io/v1alpha1"}, obj)
 	syncStore(t, s, "argocd-apps")
 
-	_, err := s.LensAction("argocd-apps", "default", "busy-app", "argocd-sync", "")
+	_, err := s.LensAction("argocd-apps", "default", "busy-app", "argocd-sync", "", nil)
 	if err == nil {
 		t.Fatal("sync must be refused while .operation is set")
 	}
@@ -333,7 +333,7 @@ func TestLensActionsDisablesWhatNeedsASelection(t *testing.T) {
 	if !found {
 		t.Fatal("cl-promote missing from the pane")
 	}
-	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", ""); err == nil {
+	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-promote", "", nil); err == nil {
 		t.Error("firing it anyway must be refused")
 	}
 }
@@ -371,7 +371,7 @@ func TestLensActionSurfacesServerErrorVerbatim(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "applications"}, "my-app", errString(msg))
 	})
 
-	_, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", "")
+	_, err := s.LensAction("argocd-apps", "default", "my-app", "argocd-sync", "", nil)
 	if err == nil {
 		t.Fatal("want the forbidden error")
 	}
@@ -385,7 +385,7 @@ func TestLensVerbAnnotate(t *testing.T) {
 	s := lensStoreWithPack(t, cnpgLikePack, cnpgGVR, "ClusterList", cnpgCluster("data", "my-db"))
 	syncStore(t, s, "cl-clusters")
 
-	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-unfence", ""); err != nil {
+	if _, err := s.LensAction("cl-clusters", "data", "my-db", "cl-unfence", "", nil); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))
@@ -459,7 +459,7 @@ func TestLensActionReturnsTheAckToken(t *testing.T) {
 	s := lensStoreWithPack(t, ackPack, ackGVR, "ThingList", ackThing("default", "t1", ""))
 	syncStore(t, s, "ack-things")
 
-	got, err := s.LensAction("ack-things", "default", "t1", "ack-poke", "")
+	got, err := s.LensAction("ack-things", "default", "t1", "ack-poke", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +471,7 @@ func TestLensActionReturnsTheAckToken(t *testing.T) {
 	}
 
 	// An action with no ack declared has no token to wait on.
-	if got, err := s.LensAction("ack-things", "default", "t1", "ack-plain", ""); err != nil || got != "" {
+	if got, err := s.LensAction("ack-things", "default", "t1", "ack-plain", "", nil); err != nil || got != "" {
 		t.Errorf("ack-plain returned %q, %v — want an empty token", got, err)
 	}
 }
@@ -529,7 +529,7 @@ actions:
 	}, vol, va)
 	syncStore(t, s, "tg-volumes")
 
-	if _, err := s.LensAction("tg-volumes", "storage", "pvc-abc", "tg-detach", ""); err != nil {
+	if _, err := s.LensAction("tg-volumes", "storage", "pvc-abc", "tg-detach", "", nil); err != nil {
 		t.Fatalf("LensAction: %v", err)
 	}
 	ps := patchActions(dynOf(t, s))
