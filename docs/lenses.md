@@ -271,6 +271,48 @@ panel describe and YAML use. A neighbour whose kind has never been opened is
 listed and marked *not loaded*: that is a different answer from "does not
 exist", and only one of them is fixed by opening that kind.
 
+**`X` shows the shape.** The same edges, walked three hops, drawn as a tree,
+with each object's own graded cells beside it. `R` answers "what is next to
+this"; `X` answers "what is the whole thing, and where in it is the failure":
+
+```
+kargo-stages/dev   + Healthy  ! Running
+├─ kargo-stages/staging   x Unhealthy  x Failed   via field
+│  └─ kargo-stages/prod   + Healthy  + Succeeded   via field
+└─ kargo-warehouses   (not loaded — open this kind to resolve)
+```
+
+It is the same walk everywhere, so every pack gets it — but it was built for
+the two tools whose whole model is a graph. A Kargo pipeline IS a DAG:
+`.spec.requestedFreight[].sources.stages` names the Stages a Stage draws
+Freight from, so one self-edge read forwards is "what feeds me" and read
+backwards is "what I feed", and fan-in and fan-out both fall out of it. An
+ArgoCD AppProject fans out to every Application it governs via
+`.spec.project`, and a generated Application names its ApplicationSet through
+its ownerRef.
+
+Three constants bound it, and each exists for a reason rather than a taste.
+Depth stops at **3**, which is where the shipped packs stop saying anything
+new — a fourth hop is mostly pods, which the table lists better. The walk
+stops at **120 objects** total, because the fan-out is unbounded in exactly
+one direction that matters: an AppProject with two hundred Applications would
+otherwise cost two hundred cache scans to draw two hundred lines into a panel
+showing forty. Truncation is **reported**, because a tree that quietly stops
+is indistinguishable from a cluster that really is that small. A line carries
+at most **3** graded cells, which fits ArgoCD's SYNC/HEALTH/OPERATION; more
+would wrap, and a wrapped tree loses the indentation that makes it a tree.
+
+One visited set covers the whole walk, not one per branch. That is what makes
+a cycle finite: the stage→stage edge resolves in both directions, so `dev`
+lists `staging` downstream while `staging` lists `dev` upstream, and a
+per-branch set would bounce between them until the depth counter ran out.
+Each object is therefore drawn exactly once, at the first place it is reached.
+
+Nothing here starts a watch. The walk reads informer caches that are already
+running, which is why an unopened kind renders as *not loaded* rather than
+quietly opening itself — resolving a relationship must not subscribe the
+operator to a kind they did not ask for.
+
 Waiting is visible. An action declaring `ack` spins in the pane until the
 controller echoes the token back into that field. Timing out is reported as
 `sent, no acknowledgement yet` — not as a failure, because the write did go
