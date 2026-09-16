@@ -21,7 +21,7 @@ already knows your cluster, namespace and selected object.**
 
 [Install](#install) · [Try it with no cluster](#try-it-in-30-seconds-no-cluster-required) ·
 [Features](#what-you-get) · [k9s → k10s](#coming-from-k9s) · [Docs](docs/README.md) ·
-[Build log](docs/build-in-public.md)
+[Changelog](CHANGELOG.md) · [Build log](docs/build-in-public.md)
 
 </div>
 
@@ -32,7 +32,8 @@ already knows your cluster, namespace and selected object.**
 > A fork of [**0x01001011/k10s**](https://github.com/0x01001011/k10s), kept for
 > one person's day-to-day cluster work. It carries the operators, tools and
 > workflow I actually run — the [lens packs](docs/lenses.md) for **ArgoCD,
-> Kargo, Traefik, CloudNativePG and Longhorn**, my own
+> Kargo, Traefik, CloudNativePG, Longhorn, k3s, Rancher, Fleet,
+> VictoriaMetrics, cert-manager, Flux and Gateway API**, my own
 > [`plugins.yaml`](docs/plugins.md) shortcuts, [themes](docs/themes.md) and AI
 > provider settings. Things upstream has no reason to carry land here first,
 > and some of them never go upstream at all.
@@ -52,6 +53,12 @@ already knows your cluster, namespace and selected object.**
 <img src="assets/screenshot.png" alt="k10s running in a terminal: resource sidebar, pod table with live status, and an action pane for the selected pod" width="960">
 
 <sub>A real terminal capture of `k10s demo` running - `just screenshot`, on the offline demo backend. Every frame in these docs comes out of the running binary, never hand-drawn.</sub>
+
+<br><br>
+
+<img src="assets/demo.gif" alt="k10s: following a crashlooping pod's logs, searching kinds and objects with ctrl+p, previewing themes live, then switching to the demo context that runs operators and opening the Kargo stages table" width="960">
+
+<sub>The same binary, recorded end to end - `just demo`, keyboard only, on the offline demo backend. vhs cannot record a cursor, so the clicking the screenshot shows is not in the clip.</sub>
 
 </div>
 
@@ -80,6 +87,16 @@ and **how little you have to remember**.
 - **Your k9s-style command plugins fit.** Put scoped shortcuts in
   `~/.k10s/plugins.yaml`; they appear beside built-in actions and receive the
   selected object, namespace, context and column values.
+- **Thirteen operator packs, gated on discovery.** ArgoCD, Kargo, CNPG,
+  Longhorn, Traefik, k3s, Rancher, Fleet, VictoriaMetrics, cert-manager, Flux
+  and Gateway API get real tables and the daily verbs on the keys beside them -
+  and nothing appears on a cluster that does not run it. ([lens
+  packs](docs/lenses.md))
+- **`X` draws the graph as a tree.** Three hops of declared edges - a Kargo
+  promotion DAG, an ArgoCD AppProject fan-out - each object carrying its own
+  graded cells, instead of one flat hop at a time.
+- **`ctrl+y` exports what you are looking at.** YAML, describe output and the
+  visible table into one file, credentials stripped, path in a toast.
 
 ## Try it in 30 seconds (no cluster required)
 
@@ -358,6 +375,7 @@ See [config.md](docs/config.md).
 | [cluster-setup.md](docs/cluster-setup.md)                                         | no cluster? installing kubectl and getting a `~/.kube/config` |
 | [backends.md](docs/backends.md) · [dev.md](docs/dev.md)                           | live vs demo backend · build, tests, headless renderer        |
 | [roadmap.md](docs/roadmap.md)                                                     | what is done, what is missing, and the known limits           |
+| [CHANGELOG.md](CHANGELOG.md) · [releases/](docs/releases)                         | every version, same headings · the prose behind each one      |
 | [marketing.md](docs/marketing.md) · [build-in-public.md](docs/build-in-public.md) | how this project is being shared                              |
 
 ## Contributing
@@ -368,6 +386,7 @@ The barrier is low on purpose. `just` lists every recipe:
 just dev            # run from source
 just shot 140 44    # render one frame headlessly - no TTY, no cluster
 just screenshot     # capture the README hero from a real terminal (vhs)
+just demo           # re-record assets/demo.gif from assets/demo.tape (vhs)
 just check          # fmt + vet + test, in the order that fails fastest
 ```
 

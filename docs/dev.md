@@ -143,10 +143,21 @@ and sibling runs instead, never nesting.
 
 ## Cutting a release
 
+Same four steps every time, in this order:
+
 ```bash
-just tag v1.4.0        # tags, pushes, and the workflow publishes the build
+# 1. notes:     docs/releases/v1.4.0.md   (prose — the workflow puts it on top)
+# 2. changelog: CHANGELOG.md              (one section, same headings, links to 1.)
+just check             # 3. fmt-check → vet → test
+just tag v1.4.0        # 4. tags, pushes, and the workflow publishes the build
 just release           # or build the same archives locally into dist/
 ```
+
+`CHANGELOG.md` is the predictable half: every version gets the same
+`Added / Changed / Fixed / Performance` headings, one line per change, and a
+link to the hand-written notes for the why. Steps 1 and 2 have to happen
+*before* the tag — the workflow reads `docs/releases/<tag>.md` off the tagged
+commit, so a changelog written afterwards lands in the next release instead.
 
 `.github/workflows/release.yml` runs the tests, cross-compiles
 `darwin/{amd64,arm64}`, `linux/{amd64,arm64}` and `windows/amd64`, writes

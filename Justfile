@@ -171,6 +171,9 @@ tag ver:
 
 # Record the reproducible demo GIF (needs charmbracelet/vhs + k10s on PATH).
 demo: install
+    # Same throwaway config as `screenshot`: the clip should show k10s, not a
+    # first-run panel or an update notice that happens to be pending today.
+    printf 'onboarded: true\nupdate:\n  disabled: true\n' > /tmp/k10s-demo-config.yaml
     vhs assets/demo.tape
 
 # Needs charmbracelet/vhs, imagemagick and a JetBrainsMono Nerd Font
