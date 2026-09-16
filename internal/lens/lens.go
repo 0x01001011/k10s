@@ -15,8 +15,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"text/template"
 
 	"k8s.io/client-go/util/jsonpath"
 	"sigs.k8s.io/yaml"
@@ -145,13 +147,69 @@ const (
 	ConfirmTyped = "typed"
 )
 
+// Option is one suggestion offered for a Param. Note is free text shown
+// beside the value — "primary", "fenced", "completed 4h ago" — so the operator
+// picks by what the thing IS rather than by recognising a pod suffix.
+type Option struct {
+	Value string `json:"value"`
+	Note  string `json:"note"`
+}
+
+// Param is one value an action asks for before it runs.
+//
+// It replaces the single-slot RequiresSelection/.Selected pair for actions
+// that need more than one answer: backing up wants a method AND a target,
+// restoring wants a name AND a source AND a recovery point. One slot cannot
+// express those, and a bespoke field per action would be a mechanism per
+// action.
+type Param struct {
+	// Name is how the templates reach it, as {{.Params.<name>}}. It must
+	// therefore be a legal Go template field — letters, digits, underscore,
+	// not starting with a digit.
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	// Type is string, int or bool; empty means string. It steers validation
+	// and how the value is rendered into a patch, not the widget.
+	Type    string `json:"type"`
+	Default string `json:"default"`
+
+	// Options is a fixed list. OptionsFrom names a live source instead: a
+	// JSONPath (leading dot) read from the selected object, or a
+	// "group/version/resource" whose related objects supply the names. The
+	// GVR form reuses the pack's edges rather than inventing a query
+	// language — "which Backups belong to this Cluster" is already declared.
+	Options     []Option `json:"options"`
+	OptionsFrom string   `json:"optionsFrom"`
+
+	// AllowFree accepts a value outside the list. Off by default: a closed
+	// list that silently accepts a typo is a list that lied.
+	AllowFree bool `json:"allowFree"`
+	Required  bool `json:"required"`
+}
+
+// Param type names. Empty is string.
+const (
+	ParamString = "string"
+	ParamInt    = "int"
+	ParamBool   = "bool"
+)
+
 // Action is one declarative mutation. Templates may use .Name, .Namespace,
-// .Context, .Now (RFC3339) and .Selected.
+// .Context, .Now (RFC3339), .Selected and .Params.
 type Action struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
 	Verb    string `json:"verb"`
 	Confirm string `json:"confirm"`
+
+	// Params are the values to collect before running. See Param.
+	Params []Param `json:"params"`
+
+	// ConfirmValue is the template for the word a typed confirmation must
+	// match. It defaults to the object's own name, which is wrong for the
+	// actions that matter most: fencing asks about an INSTANCE, so typing
+	// the cluster's name confirms something the operator was never shown.
+	ConfirmValue string `json:"confirmValue"`
 
 	// Annotations is the annotate verb's payload. An empty value removes
 	// the key — that is how un-fencing and un-suspending work.
@@ -389,6 +447,74 @@ func (a Action) validate() error {
 		if strings.TrimSpace(r.Reason) == "" {
 			return fmt.Errorf("action %q: refuseWhen %q has no reason", a.ID, r.Path)
 		}
+	}
+	if a.ConfirmValue != "" {
+		if _, err := template.New("confirmValue").Parse(a.ConfirmValue); err != nil {
+			return fmt.Errorf("action %q: confirmValue: %w", a.ID, err)
+		}
+	}
+	seen := map[string]bool{}
+	for _, p := range a.Params {
+		if err := p.validate(); err != nil {
+			return fmt.Errorf("action %q: %w", a.ID, err)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("action %q: duplicate param %q", a.ID, p.Name)
+		}
+		seen[p.Name] = true
+	}
+	return nil
+}
+
+// paramName is the subset of names a Go template can reach as a field.
+var paramName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func (p Param) validate() error {
+	if strings.TrimSpace(p.Name) == "" {
+		return errors.New("param has no name")
+	}
+	// Caught here rather than at render time: {{.Params.target-instance}}
+	// parses as a subtraction, so the failure would otherwise surface as a
+	// template error at the moment somebody presses the key on a database.
+	if !paramName.MatchString(p.Name) {
+		return fmt.Errorf("param %q: name must be letters, digits and underscores, not starting with a digit", p.Name)
+	}
+	switch p.Type {
+	case "", ParamString, ParamInt, ParamBool:
+	default:
+		return fmt.Errorf("param %q: unknown type %q", p.Name, p.Type)
+	}
+	if p.OptionsFrom != "" {
+		if err := validOptionSource(p.OptionsFrom); err != nil {
+			return fmt.Errorf("param %q: optionsFrom %q: %w", p.Name, p.OptionsFrom, err)
+		}
+	}
+	// A default outside a CLOSED list is a contradiction the pack states in
+	// two places. Only checkable for a fixed list: a live source is not known
+	// until there is a cluster to ask.
+	if p.Default != "" && !p.AllowFree && len(p.Options) > 0 && !p.hasOption(p.Default) {
+		return fmt.Errorf("param %q: default %q is not among its options", p.Name, p.Default)
+	}
+	return nil
+}
+
+func (p Param) hasOption(v string) bool {
+	for _, o := range p.Options {
+		if o.Value == v {
+			return true
+		}
+	}
+	return false
+}
+
+// validOptionSource accepts the two shapes optionsFrom may take. The leading
+// dot disambiguates them: a JSONPath always has one, a GVR never does.
+func validOptionSource(s string) error {
+	if strings.HasPrefix(s, ".") || strings.HasPrefix(s, "{") {
+		return ValidPath(s)
+	}
+	if _, _, _, err := ParseGVR(s); err != nil {
+		return errors.New(`want a jsonpath (".status.x") or a "group/version/resource"`)
 	}
 	return nil
 }

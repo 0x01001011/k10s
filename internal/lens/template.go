@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -19,6 +20,9 @@ type Vars struct {
 	// snapshot. It defaults to Name, because for most actions the row's own
 	// name is exactly the right target.
 	Selected string
+	// Params are the action's collected parameters, reached in templates as
+	// {{.Params.<name>}}. Always non-nil after Action.Fill.
+	Params map[string]string
 }
 
 // ErrSelectedRequired means the action declares requiresSelection but nothing
@@ -35,6 +39,33 @@ func (v Vars) resolve() Vars {
 	if v.Selected == "" {
 		v.Selected = v.Name
 	}
+	// missingkey=error fires on a nil map too, so an action with no params
+	// would otherwise fail to render the moment any template mentioned
+	// .Params at all.
+	if v.Params == nil {
+		v.Params = map[string]string{}
+	}
+	return v
+}
+
+// Fill returns v with every declared param present: the caller's value where
+// they supplied one, the param's default everywhere else.
+//
+// It copies rather than writes through, because the UI holds one parameter map
+// per open form and re-renders the preview on every keystroke — filling in
+// place would make a default indistinguishable from something the operator
+// typed, and there would be no way back to "untouched".
+func (a Action) Fill(v Vars) Vars {
+	out := make(map[string]string, len(a.Params)+len(v.Params))
+	for k, val := range v.Params {
+		out[k] = val
+	}
+	for _, p := range a.Params {
+		if out[p.Name] == "" {
+			out[p.Name] = p.Default
+		}
+	}
+	v.Params = out
 	return v
 }
 
@@ -91,11 +122,45 @@ func RenderTree(node any, v Vars) (any, error) {
 }
 
 // Check reports why an action cannot run right now, or nil.
+//
+// Parameters are checked here rather than only in the form, because the form
+// is not the only caller: a key press fires the action directly when it has
+// nothing to ask, and a pack edited to add a required param must not turn that
+// into a write with an empty value.
 func (a Action) Check(v Vars) error {
 	if a.RequiresSelection && v.Selected == "" {
 		return ErrSelectedRequired
 	}
+	for _, p := range a.Params {
+		val := v.Params[p.Name]
+		if val == "" {
+			if p.Required {
+				return fmt.Errorf("%s is required", p.label())
+			}
+			continue
+		}
+		// An empty Options list is not a closed list — it is a field with no
+		// suggestions, or one whose suggestions come from a cluster this
+		// check cannot reach.
+		if !p.AllowFree && len(p.Options) > 0 && !p.hasOption(val) {
+			return fmt.Errorf("%s: %q is not one of its allowed values", p.label(), val)
+		}
+		if p.Type == ParamInt {
+			if _, err := strconv.Atoi(val); err != nil {
+				return fmt.Errorf("%s: %q is not a whole number", p.label(), val)
+			}
+		}
+	}
 	return nil
+}
+
+// label is what to call the param when refusing. The declared label reads
+// better in a sentence; the name is the fallback and is never empty.
+func (p Param) label() string {
+	if p.Label != "" {
+		return p.Label
+	}
+	return p.Name
 }
 
 // Kubectl is the equivalent command, for the confirm modal to show.
