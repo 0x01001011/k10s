@@ -76,7 +76,7 @@ var resourceFixtures = []resourceDef{
 			{"migrate-db-29341-8kdlp", "0/1", "Completed", "0", "0m", "0Mi", "ip-10-0-1-14", "51m"},
 			{"notify-consumer-84fbb9c7c-5wnjd", "1/1", "Running", "1", "88m", "241Mi", "ip-10-0-3-51", "9d"},
 			{"payment-api-9d7c8f6b5-t4z8v", "2/2", "Running", "0", "204m", "722Mi", "ip-10-0-2-88", "2d"},
-			{"payment-api-9d7c8f6b5-wr3nc", "1/2", "Pending", "0", "-", "-", "<none>", "4m"},
+			{"payment-api-9d7c8f6b5-wr3nc", "1/2", "Pending", "0", "pending", "pending", "<none>", "4m"},
 			{"search-indexer-7c9b4d8f6-jx0pm", "1/1", "Running", "0", "310m", "1.2Gi", "ip-10-0-2-88", "21d"},
 			{"web-frontend-6b8c7d9f5-c8trq", "1/1", "Running", "0", "76m", "180Mi", "ip-10-0-1-14", "1d"},
 			{"web-frontend-6b8c7d9f5-nb4kd", "1/1", "Running", "0", "71m", "176Mi", "ip-10-0-3-51", "1d"},
@@ -249,7 +249,9 @@ var resourceFixtures = []resourceDef{
 			Cols: []string{"NAME", "REQUEST", "LIMIT", "AGE"}, Allowed: basicActions},
 		Rows: [][]string{
 			{"compute-quota", "cpu: 4200m/16, memory: 12Gi/32Gi", "cpu: 8/32, memory: 24Gi/64Gi", "180d"},
-			{"object-quota", "-", "-", "180d"},
+			// An object-count quota has no compute request or limit — not
+			// applicable, as opposed to not yet known.
+			{"object-quota", "n/a", "n/a", "180d"},
 		},
 		Extra: []nsRow{
 			{"staging", []string{"compute-quota", "cpu: 900m/8, memory: 3Gi/16Gi", "cpu: 2/16, memory: 6Gi/32Gi", "77d"}},
@@ -417,7 +419,7 @@ var resourceFixtures = []resourceDef{
 			{"cert-manager", []string{"web-tls", "Certificate", "44d"}},
 			{"cert-manager", []string{"api-tls", "Certificate", "12d"}},
 			{"monitoring", []string{"k8s-prometheus", "Prometheus", "128d"}},
-			{"-", []string{"letsencrypt-prod", "ClusterIssuer", "180d"}},
+			{"<cluster>", []string{"letsencrypt-prod", "ClusterIssuer", "180d"}},
 		},
 	},
 }

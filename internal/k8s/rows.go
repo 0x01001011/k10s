@@ -343,6 +343,9 @@ func (s *Store) RowCount(kind, ns string) int {
 func (s *Store) podRows(ns string) []nsRow {
 	pods, _ := s.podLister(ns).List(labels.Everything())
 	out := make([]nsRow, 0, len(pods))
+	// Asked once per row set, not once per pod: it takes the same lock the
+	// per-pod lookup does, and the answer cannot change mid-build.
+	metricsUp := s.podMetricsKnown()
 	for _, p := range pods {
 		ready, total := 0, len(p.Spec.Containers)
 		var restarts int32
@@ -352,7 +355,13 @@ func (s *Store) podRows(ns string) []nsRow {
 			}
 			restarts += cs.RestartCount
 		}
-		cpu, mem := "-", "-"
+		// No metrics API at all is "n/a" — nothing will ever arrive. A pod
+		// the API has simply not reported yet is "pending". The old dash
+		// covered both, was graded subtle, and so read as a settled zero.
+		cpu, mem := "n/a", "n/a"
+		if metricsUp {
+			cpu, mem = "pending", "pending"
+		}
 		if m, ok := s.podMetric(p.Namespace, p.Name); ok {
 			cpu = fmt.Sprintf("%dm", m.cpuMilli)
 			mem = fmt.Sprintf("%dMi", m.memBytes/(1024*1024))
@@ -406,11 +415,19 @@ func podStatus(p *corev1.Pod) string {
 
 // ---- deployments / statefulsets / daemonsets ---------------------------
 
+// firstImage names the first container's image, and says so when there are
+// more. The header reads IMAGE, singular and unqualified, so a sidecar-bearing
+// workload was silently showing a third of the truth — a confident wrong
+// answer rather than a missing one.
 func firstImage(spec corev1.PodSpec) string {
-	if len(spec.Containers) > 0 {
+	switch len(spec.Containers) {
+	case 0:
+		return "<none>"
+	case 1:
 		return spec.Containers[0].Image
+	default:
+		return fmt.Sprintf("%s +%d", spec.Containers[0].Image, len(spec.Containers)-1)
 	}
-	return "-"
 }
 
 func (s *Store) deployRows(ns string) []nsRow {
@@ -471,7 +488,8 @@ func (s *Store) jobRows(ns string) []nsRow {
 		if j.Spec.Completions != nil {
 			completions = strconv.Itoa(int(*j.Spec.Completions))
 		}
-		dur := "-"
+		// A job that has not started is pending, not unknown.
+		dur := "pending"
 		if j.Status.StartTime != nil {
 			end := time.Now()
 			if j.Status.CompletionTime != nil {
@@ -561,7 +579,11 @@ func (s *Store) ingRows(ns string) []nsRow {
 		}
 		addrStr := strings.Join(addrs, ",")
 		if addrStr == "" {
-			addrStr = "-"
+			// No LoadBalancer ingress yet. Normal for a fresh Ingress and an
+			// outage for a three-day-old one; both rendered as the same
+			// ungraded dash. "pending" at least names which of the two
+			// states this is, and cellLevel grades it.
+			addrStr = "pending"
 		}
 		row := []string{ing.Name, class, hostStr, addrStr, age(ing.CreationTimestamp.Time)}
 		out = append(out, nsRow{ing.Namespace, row})
@@ -595,9 +617,13 @@ func (s *Store) pvcRows(ns string) []nsRow {
 	items, _ := s.pvcLister(ns).List(labels.Everything())
 	out := make([]nsRow, 0, len(items))
 	for _, pvc := range items {
-		cap := "-"
+		// An unbound PVC has no capacity because nothing satisfied it yet —
+		// which is the claim's whole problem, not a gap in our reading of it.
+		cap := "pending"
 		if q, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok {
 			cap = q.String()
+		} else if pvc.Status.Phase == corev1.ClaimLost {
+			cap = "lost"
 		}
 		sc := "<none>"
 		if pvc.Spec.StorageClassName != nil {
@@ -828,7 +854,10 @@ func (s *Store) refreshCRs() {
 		for _, item := range list.Items {
 			ns := item.GetNamespace()
 			if ns == "" {
-				ns = "-"
+				// Cluster-scoped, which is a fact about the resource, not a
+				// missing value. A dash here collided with every other dash
+				// in the table.
+				ns = "<cluster>"
 			}
 			out = append(out, nsRow{ns, []string{item.GetName(), crd.Spec.Names.Kind, age(item.GetCreationTimestamp().Time)}})
 		}
@@ -897,7 +926,10 @@ func (s *Store) hpaRows(ns string) []nsRow {
 	items, _ := s.hpaLister(ns).List(labels.Everything())
 	out := make([]nsRow, 0, len(items))
 	for _, h := range items {
-		min := "-"
+		// An unset minReplicas is not an unknown minimum: the API defaults it
+		// to 1. Printing a dash for a value we know is the plainest case of a
+		// lying column in this table.
+		min := "1"
 		if h.Spec.MinReplicas != nil {
 			min = strconv.Itoa(int(*h.Spec.MinReplicas))
 		}

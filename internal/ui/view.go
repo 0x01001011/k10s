@@ -641,6 +641,13 @@ func allDigits(s string) bool {
 var statusColors = map[string]string{
 	"Running": "ok", "Ready": "ok", "Active": "ok", "Bound": "ok", "True": "ok", "Normal": "ok",
 	"Completed": "subtle", "False": "subtle", "<none>": "subtle", "-": "subtle",
+	// The sentinel vocabulary. A bare "-" used to mean unknown, unset,
+	// defaulted, not-applicable and pending all at once, all dimmed, so five
+	// different states read as one settled value. Each word now says which
+	// state it is, and only the one that is actually waiting on something
+	// gets graded.
+	"n/a": "subtle", "<cluster>": "subtle",
+	"pending": "warn", "lost": "err",
 	"Pending": "warn", "Terminating": "warn", "ContainerCreating": "warn", "Warning": "warn", "NotReady": "err",
 	"CrashLoopBackOff": "err", "Error": "err", "ImagePullBackOff": "err", "Failed": "err", "Evicted": "err",
 }
@@ -1079,10 +1086,18 @@ func (m *Model) tableBody(inner, rows int) []string {
 			// it, so the value keeps its own width and the row still adds
 			// up to rowW.
 			w := widths[k]
-			if ci < len(extra) && extra[ci] > 0 && !metric[ci] {
+			metricCol := ci < len(metric) && metric[ci]
+			grade := severityGlyph(lvl)
+			// A metric column spends its two reserved cells on the trend
+			// arrow — but a graded sentinel like `pending` has no trend to
+			// report, and leaving it unmarked would make it the one cell in
+			// the table carrying severity in colour alone. It takes the
+			// glyph instead, in the same two cells.
+			glyphed := ci < len(extra) && extra[ci] > 0 && (!metricCol || grade != "")
+			if glyphed {
 				// The whole column spends the two cells, glyph or not, so
 				// an ungraded value still lines up under a graded one.
-				g := severityGlyph(lvl)
+				g := grade
 				if g == "" {
 					g = "  "
 				}
@@ -1096,7 +1111,7 @@ func (m *Model) tableBody(inner, rows int) []string {
 			switch {
 			case ci < len(cols) && cols[ci] == nameCol && sel:
 				b.WriteString(paint(bg, col, true, cell))
-			case ci < len(metric) && metric[ci] && w > 2:
+			case metricCol && !glyphed && w > 2:
 				// Value, then the arrow in the two reserved cells.
 				cell = pad(trunc(v, w-2), w-2)
 				b.WriteString(paint(bg, col, false, cell))
