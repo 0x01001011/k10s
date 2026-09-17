@@ -1807,6 +1807,21 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.themeIdx = (m.themeIdx - 1 + len(m.themes)) % len(m.themes)
 		m.toast = "theme → " + m.th().Name
 		m.saveConfig()
+	case "left", "h":
+		// Documented since the first release, bound nowhere: `h` fell through
+		// to the Actions loop and then to plugins, and did nothing at all.
+		// From the main pane these focus the Resources list, which is what
+		// docs/keybindings.md has always claimed.
+		if m.focus == focusMain && m.mode == modeTable {
+			m.focus = focusList
+		}
+	case "right":
+		// Only `right` crosses back, never `l`: `l` is Logs once the table
+		// has focus. The pair reads as symmetrical and is not, which is why
+		// the docs spell out `←` `h` / `→` rather than `h`/`l`.
+		if m.focus == focusList {
+			m.focus = focusMain
+		}
 	case "t":
 		// The nested owner tree. `T` is the theme cycler and `X` walks
 		// lens-declared edges into the text panel; this is built-in

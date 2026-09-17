@@ -169,7 +169,7 @@ chứng minh được là không làm chậm frame.
 - [x] **T40** column policy — weight, priority, đo theo cell
 - [x] **T41** honest columns — bỏ `-` đa nghĩa
 - [x] **T42** row groups — gom theo owner, mặc định bật cho Pods
-- [ ] **T43** view engine — tách mode switch khỏi `tableBody`
+- [x] **T43** view engine — **không tách** (xem card); hai sửa nhỏ đi kèm đã làm
 - [x] **T44** metric history + bar + sparkline + chart panel braille (`:chart`)
 - [x] **T45** action search trong palette + typed gate cho Delete/Drain
 - [x] **T46** cây lồng thật trong bảng chính (opt-in, phím `t` — `T` đã là theme)
@@ -1722,7 +1722,33 @@ P5); bản sao của 4 luật sidebar (`groups_test.go:125`, `:217`, `:176`,
 
 ---
 
-## T43 — view engine
+## T43 — view engine — ĐÓNG, KHÔNG TÁCH
+
+**Kết luận sau khi làm T42, T44, T46.** Card này được xếp sau cùng để quyết
+định dựa trên bằng chứng, và bằng chứng nói: không tách.
+
+Lý do card đưa ra là "thêm view mới = thêm một hàm và một case, không phải
+thêm nhánh trong `tableBody`". Đã thêm hai view thật kể từ lúc viết card —
+cây sở hữu (T46) và chart panel (T44) — và **không cái nào phải đụng
+`tableBody`**: cây có `treeBody` riêng cộng một nhánh trong `viewMain`, chart
+nối vào cuối body. `viewMain` vốn đã là một dispatch phẳng gồm các early
+return, mỗi nhánh khoảng 8 dòng.
+
+Tách bây giờ là churn và rủi ro regression, đổi lấy không gì người dùng thấy
+được. Mở lại card này khi có view thứ ba thật sự không nhét vừa — không phải
+trước đó.
+
+Hai sửa nhỏ card mang theo thì có giá trị thật và **đã làm**:
+
+- [x] Bảng có `n/m` trên title (text view đã có từ đầu, bảng thì không).
+- [x] `←` / `h` — doc ghi "focus resource list" từ bản đầu nhưng **không bind
+      ở đâu cả**; `h` rơi xuống vòng Actions rồi plugin rồi thôi. Nay bind
+      thật. `l` **không** bind (đó là Logs) — cặp phím đọc như đối xứng nhưng
+      không phải, nên doc ghi `←` `h` / `→`.
+
+---
+
+## T43 (bản gốc) — view engine
 
 **Effort** M · **Deps** T39, T42 · **Lane** E
 

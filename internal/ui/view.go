@@ -877,14 +877,25 @@ func (m *Model) viewMain(w, h int) Block {
 		title += " · find: " + m.rowSearch
 	}
 
+	tag, tagPlain := zoomTag, zoomPlain
+
 	// Advertise the find key next to zoom, since there is no visible search
 	// box to hint at it any more.
-	tag, tagPlain := zoomTag, zoomPlain
 	if !searching {
 		findHint := m.mark("tablesearch", brk.Render("[ ")+tagStyle.Render("f")+
 			lipgloss.NewStyle().Background(th.Bg).Foreground(th.Subtle).Render(" to search")+brk.Render(" ]"))
 		tag = findHint + brk.Render(" ") + zoomTag
 		tagPlain = "[ f to search ] " + zoomPlain
+	}
+
+	// Where you are in the list. The text view has carried this since it was
+	// written ("38/66  57%") and the table never did, so scrolling a long
+	// namespace gave no sense of depth at all. Prepended after the block
+	// above, which reassigns tag wholesale.
+	if _, rows := m.tableData(); len(rows) > 0 {
+		pos := fmt.Sprintf("%d/%d", clamp(m.rowIdx+1, 1, len(rows)), len(rows))
+		tag = paint(th.Bg, th.Subtle, false, pos) + brk.Render(" ") + tag
+		tagPlain = pos + " " + tagPlain
 	}
 
 	return Panel(th, PanelOpts{
