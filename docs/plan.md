@@ -114,7 +114,7 @@ Card chỉ xong khi **tất cả** đúng:
 
 ### P1 — daily driver
 
-- [ ] **T07** sort theo cột
+- [x] **T07** sort theo cột
 - [ ] **T08** multi-select + bulk action
 - [ ] **T09** log: grep / previous / timestamps / save
 - [ ] **T10** port-forward manager
@@ -166,12 +166,12 @@ chứng minh được là không làm chậm frame.
 - [x] **T37** frame memo — một `Rows()` mỗi frame
 - [x] **T38** sửa perf guard để đo đúng điều hướng
 - [x] **T39** layout budget — header và pane theo bề ngang
-- [ ] **T40** column policy — weight, priority, đo theo cell
-- [ ] **T41** honest columns — bỏ `-` đa nghĩa
-- [ ] **T42** row groups — gom theo owner, mặc định bật cho Pods
+- [x] **T40** column policy — weight, priority, đo theo cell
+- [x] **T41** honest columns — bỏ `-` đa nghĩa
+- [x] **T42** row groups — gom theo owner, mặc định bật cho Pods
 - [ ] **T43** view engine — tách mode switch khỏi `tableBody`
-- [ ] **T44** metric history + bar / sparkline / chart braille
-- [ ] **T45** action search trong palette + typed gate cho Delete/Drain
+- [~] **T44** metric history + bar + sparkline — **còn lại**: chart panel braille
+- [x] **T45** action search trong palette + typed gate cho Delete/Drain
 - [ ] **T46** cây lồng thật trong bảng chính (opt-in, chỉ làm sau khi T42 chạy thật)
 
 ### Lanes
