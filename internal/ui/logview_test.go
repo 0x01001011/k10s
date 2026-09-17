@@ -433,6 +433,11 @@ func gutterNumbers(m *Model, w, rows int) []string {
 		if len(f) == 0 {
 			continue
 		}
+		// A group header leads with a chevron and carries no number: it is
+		// not an object, so there is nothing to count.
+		if f[0] == "▾" || f[0] == "▸" {
+			continue
+		}
 		// A selected row leads with the ▌ marker.
 		if f[0] == "▌" {
 			f = f[1:]

@@ -260,6 +260,49 @@ type Model struct {
 	// View, so it is never staler than one frame.
 	kindsMemo []domain.Kind
 
+	// rowsMemo holds tableData()'s answer for the current frame or message.
+	// tableData is the single read path for the table, so one frame asked for
+	// it three to five times — the search box, the body, curName() twice via
+	// curRow(), and rowStatus twice more on Nodes — and every call was a full
+	// formatted row build (488µs / 8018 allocs at 2000 pods). Keyed because
+	// kind, namespace and the row search can all change inside one Update.
+	// Cleared at the top of Update and View, exactly like kindsMemo, so it is
+	// never staler than one frame — a memo that outlived the frame would show
+	// a cluster that had stopped changing.
+	rowsMemo *rowsCache
+
+	// sorts is the column sort per kind. Pods sorted by RESTARTS must not
+	// follow you into Services, and coming back to Pods must find it as you
+	// left it. In memory only: config.yaml's parser is a flat hand-rolled
+	// subset that cannot hold a per-kind map, and saved views (T12) own
+	// cross-restart persistence.
+	sorts map[string]sortState
+
+	// groups is the row group-by key per kind, persisted as one flat line.
+	// collapsedRows is which groups are folded, and is NOT persisted: a
+	// folded row-group saves no requests (unlike a folded sidebar group,
+	// which stops that kind being counted), so reopening a session with half
+	// the pods hidden would be a surprise rather than a preference.
+	groups        map[string]groupKey
+	collapsedRows map[string]map[string]bool
+
+	// hist is the per-row metric window behind the inline sparkline, and
+	// spark is whether to draw it. Off by default: the sparkline costs eight
+	// cells in the CPU column, which at 80 columns is a column the table does
+	// not have to spare. `:set spark` turns it on.
+	hist  map[string]*ring
+	spark bool
+	// chart shows the selected object's window as a braille plot under the
+	// table. It reads the same store the sparkline does.
+	chart bool
+
+	// tree is the nested owner view (T46) when it is open, and treeIdx the
+	// cursor into it. Not persisted: it starts two informers, so it is a
+	// thing you ask for rather than a thing you come back to.
+	tree       []treeRow
+	treeIdx    int
+	treeScroll int
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -430,6 +473,7 @@ func (m *Model) loadConfig() {
 		m.collapsed = defaultCollapsed()
 	}
 	m.zoomed = c.Zoomed
+	m.groups = parseGroupConfig(c.Group)
 	m.applyUpdateConfig(c.Update)
 	m.onboarded = c.Onboarded
 	// First run opens straight into the cluster. A settings dialog in front
@@ -466,6 +510,7 @@ func (m *Model) saveConfig() error {
 		Collapsed:    m.collapsedGroups(),
 		CollapsedSet: true,
 		Zoomed:       m.zoomed,
+		Group:        renderGroupConfig(m.groups),
 		AI: config.AI{
 			Provider: providers[m.cfg.provider],
 			BaseURL:  m.cfg.url,
@@ -513,6 +558,25 @@ func (m *Model) curKind() domain.Kind {
 		return domain.Kind{}
 	}
 	return ks[m.resIdx]
+}
+
+// targetKind is the kind an action would act on: the sidebar's kind normally,
+// and in the tree the kind of the node under the cursor — a Deployment, a
+// ReplicaSet and a Pod share one list there, and Describe has to mean the row
+// you are looking at.
+//
+// Deliberately NOT folded into curKind(). That is what tableData keys on, so
+// overriding it would repoint the whole table at whatever the cursor happened
+// to be sitting on.
+func (m *Model) targetKind() domain.Kind {
+	if t, ok := m.treeSelected(); ok {
+		for _, k := range m.kinds() {
+			if k.Key == t.ref.Kind {
+				return k
+			}
+		}
+	}
+	return m.curKind()
 }
 
 func (m *Model) res() domain.Kind { return m.curKind() }
@@ -727,22 +791,62 @@ func (m *Model) filtered() []int {
 // (m.rowSearch). Every place that reads the table — selection bounds,
 // rendering, click targets — goes through this so they never disagree
 // about what's currently showing.
+// rowsCache is one frame's worth of tableData, with the inputs it was built
+// from so a change inside a single Update rebuilds instead of lying.
+//
+// count is part of the key, not decoration: a caller can mutate the cluster
+// and re-read without a message in between (an action that deletes, then asks
+// what is now selected), and a memo keyed only on kind/namespace/search would
+// hand back the row it just removed. RowCount is the cheap O(1) path the
+// sidebar badges already use, so paying it on a cache hit is far less than
+// the full row build it avoids.
+type rowsCache struct {
+	kind   string
+	ns     string
+	search string
+	sort   sortState
+	count  int
+	cols   []string
+	rows   [][]string
+}
+
 func (m *Model) tableData() ([]string, [][]string) {
-	cols, rows := m.src.Rows(m.curKind().Key, m.namespace)
+	kind := m.curKind().Key
+	count := m.src.RowCount(kind, m.namespace)
+	srt := m.sortFor(kind)
+	if c := m.rowsMemo; c != nil && c.kind == kind && c.ns == m.namespace &&
+		c.search == m.rowSearch && c.sort == srt && c.count == count {
+		return c.cols, c.rows
+	}
+
+	cols, rows := m.buildTableData(kind)
+	m.rowsMemo = &rowsCache{
+		kind: kind, ns: m.namespace, search: m.rowSearch, sort: srt, count: count,
+		cols: cols, rows: rows,
+	}
+	return cols, rows
+}
+
+// buildTableData is tableData without the memo — the actual work, split out
+// so the cache has one entry point and one miss path.
+func (m *Model) buildTableData(kind string) ([]string, [][]string) {
+	cols, rows := m.src.Rows(kind, m.namespace)
 
 	// The Namespaces table doubles as the namespace switcher, so "all" leads
 	// it as a first-class choice. It is synthesized here rather than in a
 	// backend because it is not a namespace object — it is a view over all
 	// of them. Doing it in tableData keeps rendering, selection and click
 	// targets working from one definition.
-	if m.curKind().Key == "namespaces" {
+	if kind == "namespaces" {
 		rows = append([][]string{allNamespacesRow(cols)}, rows...)
 	}
 
 	if m.rowSearch != "" {
 		rows = filterRows(rows, m.rowSearch)
 	}
-	return cols, rows
+	// Sort last, over the filtered set, so "the worst of what I searched for"
+	// is one question rather than two.
+	return cols, sortRows(rows, m.sortFor(kind), len(cols))
 }
 
 // showNamespaceChooser opens the Namespaces table in the main panel — the
@@ -830,6 +934,9 @@ func (m *Model) curRow() []string {
 // events. Looked up by header name (not a fixed index) since :ns all
 // prepends a NAMESPACE column that shifts every other column right.
 func (m *Model) curName() string {
+	if t, ok := m.treeSelected(); ok {
+		return t.name
+	}
 	row := m.curRow()
 	if len(row) == 0 {
 		return "-"
@@ -851,6 +958,9 @@ func (m *Model) curName() string {
 // filter when it names one namespace, or — under :ns all — whatever that
 // row's own NAMESPACE cell says, since rows there span many namespaces.
 func (m *Model) curNamespace() string {
+	if t, ok := m.treeSelected(); ok {
+		return t.ref.Namespace
+	}
 	if m.namespace != domain.AllNamespaces {
 		return m.namespace
 	}
@@ -915,8 +1025,26 @@ type layout struct {
 	statusY          int
 }
 
+// headerRows is how many rows the top banner gets, by terminal width.
+//
+// Four rows is right when there is room for them: identity, a blank, the
+// cluster gauges with their absolute figures, and a rule. At 80x24 it is a
+// third of the screen spent before the first pod, and two of those four rows
+// carry nothing — so the blank and the rule go first, then the identity line
+// and the gauges share one row.
+func headerRows(w int) int {
+	switch {
+	case w >= 120:
+		return 4
+	case w >= 96:
+		return 2
+	default:
+		return 1
+	}
+}
+
 func (m *Model) layout() layout {
-	l := layout{headerH: 4, promptH: 3}
+	l := layout{headerH: headerRows(m.w), promptH: 3}
 	if m.promptZoom {
 		// Half the screen: enough to read a long command or an AI prompt
 		// while composing it, without hiding the table entirely.
@@ -930,8 +1058,17 @@ func (m *Model) layout() layout {
 		l.midH = 3
 	}
 	l.leftW, l.rightW = 22, 24
-	if m.w < 96 {
+	if m.w < 120 {
 		l.leftW, l.rightW = 18, 20
+	}
+	// Below 96 the two side panes were taking 38 of 80 columns — nearly half
+	// the screen — to show a static verb list and a sidebar, while NAME was
+	// being truncated to `web-frontend-6b8c…`. The Actions pane goes first:
+	// its keys are also on the status bar and in the palette, whereas the
+	// sidebar is the only thing saying where you are. `z` still collapses
+	// both.
+	if m.w < 96 {
+		l.rightW = 0
 	}
 	if m.zoomed {
 		l.leftW, l.rightW = 0, 0
@@ -953,8 +1090,10 @@ func (m *Model) visibleRows() int {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// A message may be the one that added a kind, so this message sees a
-	// fresh list rather than the previous frame's.
+	// fresh list rather than the previous frame's. Same for the rows: an
+	// informer update between two messages must not be hidden by a memo.
 	m.kindsMemo = nil
+	m.rowsMemo = nil
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
@@ -973,6 +1112,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.anim++
+		// The one place a metric sample is taken. Doing it here rather than
+		// in View is what makes the sparkline a time series: View runs per
+		// keystroke and only over visible rows, so it would append duplicates
+		// while typing, nothing while idle, and leave holes for anything
+		// scrolled past. See history.go.
+		if m.mode == modeTable && m.spark {
+			m.observeMetrics()
+		}
 		// A repaint is where a re-sorted table becomes visible, so it is
 		// also where the cursor has to be put back on its object.
 		m.reanchorRow()
@@ -1176,14 +1323,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toast = "✗ " + msg.err.Error()
 			return m, nil
 		}
+		// Snapshot what the editor is being given, so an exit that changed
+		// nothing can be told from one that did.
+		before, _ := os.ReadFile(msg.path)
+
 		c, err := editorCommand(os.Getenv("EDITOR"), msg.path)
 		if err != nil {
 			return m, func() tea.Msg {
-				return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, err: err}
+				return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, before: string(before), err: err}
 			}
 		}
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
-			return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, err: err}
+			return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, before: string(before), err: err}
 		})
 
 	case editExitMsg:
@@ -1204,6 +1355,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, resumeMouse
 		}
 		kind, ns, name := msg.kind, msg.ns, msg.name
+
+		// An editor exit is not an intent to write. Quitting vi with :q, or
+		// an editor that crashed and left the file as it was, used to reach
+		// Apply and put the object back on the cluster — a write nobody
+		// asked for, with a real audit trail behind it.
+		if msg.before != "" && string(data) == msg.before {
+			m.toast = name + " unchanged — nothing applied"
+			return m, resumeMouse
+		}
+		// An empty file is a mistake, not a manifest. Applying it would be a
+		// request the API server is entitled to take literally.
+		if len(strings.TrimSpace(string(data))) == 0 {
+			m.toast = "✗ " + name + ": the file came back empty — nothing applied"
+			return m, resumeMouse
+		}
+
 		apply := m.runAction("✓ "+name+" updated", func() error {
 			return m.src.Apply(kind, ns, name, string(data))
 		})
@@ -1640,6 +1807,30 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.themeIdx = (m.themeIdx - 1 + len(m.themes)) % len(m.themes)
 		m.toast = "theme → " + m.th().Name
 		m.saveConfig()
+	case "left", "h":
+		// Documented since the first release, bound nowhere: `h` fell through
+		// to the Actions loop and then to plugins, and did nothing at all.
+		// From the main pane these focus the Resources list, which is what
+		// docs/keybindings.md has always claimed.
+		if m.focus == focusMain && m.mode == modeTable {
+			m.focus = focusList
+		}
+	case "right":
+		// Only `right` crosses back, never `l`: `l` is Logs once the table
+		// has focus. The pair reads as symmetrical and is not, which is why
+		// the docs spell out `←` `h` / `→` rather than `h`/`l`.
+		if m.focus == focusList {
+			m.focus = focusMain
+		}
+	case "t":
+		// The nested owner tree. `T` is the theme cycler and `X` walks
+		// lens-declared edges into the text panel; this is built-in
+		// ownership, in the table, with a cursor. The log viewer's own `t`
+		// is handled above this switch, so it keeps meaning "raw lines"
+		// while you are reading a log.
+		if m.mode == modeTable {
+			m.toggleTree()
+		}
 	case "R":
 		return m.showRelated()
 	case "X":
@@ -1647,6 +1838,37 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		// have. R answers "what is next to this"; X answers "what is the
 		// shape, and where in it is the failure".
 		return m.showTree()
+	case " ", "space":
+		// The sidebar's fold key, for rows. It stays a search character
+		// while searching, which is why this sits behind the mode check.
+		if m.mode == modeTable && m.rowSearch == "" {
+			cols, rows := m.tableData()
+			if spans := m.groupSpans(cols, rows); len(spans) > 0 {
+				m.toggleRowGroup(spans, m.rowIdx)
+			}
+		}
+	case "<", ">":
+		// Walk the sort column. `s` is Shell and `ctrl+s` is mouse capture,
+		// and shift+digit is unreliable — terminals send !@#$%^&*( for it,
+		// and 1-9 are spoken for by saved views.
+		if m.mode == modeTable {
+			cols, _ := m.tableData()
+			d := 1
+			if msg.String() == "<" {
+				d = -1
+			}
+			m.moveSortColumn(m.curKind().Key, len(cols), d)
+			m.toast = m.sortToast(cols)
+		}
+	case "S":
+		if m.mode == modeTable {
+			cols, _ := m.tableData()
+			if !m.flipSortDirection(m.curKind().Key) {
+				m.toast = "no sort column — < and > pick one"
+			} else {
+				m.toast = m.sortToast(cols)
+			}
+		}
 	case "z":
 		m.setZoomed(!m.zoomed)
 		m.toast = map[bool]string{true: "zoomed", false: "restored"}[m.zoomed]
@@ -2049,8 +2271,15 @@ func (m *Model) move(delta int) {
 			m.textTop = clamp(m.textTop+delta, 0, maxi(0, len(m.textLines)-(m.layout().midH-2)))
 			return
 		}
-		_, rows := m.tableData()
+		if m.treeOpen() {
+			m.moveTree(delta)
+			return
+		}
+		cols, rows := m.tableData()
 		m.rowIdx = clamp(m.rowIdx+delta, 0, maxi(0, len(rows)-1))
+		// Arrow keys walk only what is on screen, and never open a group you
+		// folded — the sidebar's rule, for rows.
+		m.rowIdx = m.skipCollapsed(cols, rows, m.rowIdx, delta)
 		m.rowMem[m.curKind().Key] = m.rowIdx
 		m.anchorRow()
 		m.syncScroll()
@@ -2142,7 +2371,7 @@ func (m *Model) fireAction(a Action) tea.Cmd {
 		return nil
 	}
 
-	r := m.curKind()
+	r := m.targetKind()
 	name := m.curName()
 	kind := r.Key
 	ns := m.curNamespace()
@@ -2179,8 +2408,13 @@ func (m *Model) fireAction(a Action) tea.Cmd {
 		}
 	case domain.ADelete:
 		m.confirm = &confirmState{
-			title:   "Delete " + r.Short,
-			danger:  true,
+			title:  "Delete " + r.Short,
+			danger: true,
+			// Enter is also the universal "open" key, so a plain confirm
+			// puts deletion one keystroke from every table — D, Enter. The
+			// typed gate already exists and lens packs already use it for
+			// exactly this class of write.
+			typed:   name,
 			message: []string{"Permanently delete", r.Short + "/" + name, "namespace: " + ns, "", "This action CANNOT be undone."},
 			onOK: func(mm *Model) tea.Cmd {
 				return mm.runAction("✓ "+r.Short+"/"+name+" deleted", func() error {
@@ -2230,6 +2464,10 @@ func (m *Model) fireAction(a Action) tea.Cmd {
 		m.confirm = &confirmState{
 			title:  "Drain node",
 			danger: true,
+			// Evicting every pod off a node is the single most consequential
+			// key in the app, and it was gated the same way as a dismissible
+			// notice.
+			typed: name,
 			message: []string{
 				"Cordon and evict all pods from", "no/" + name, "",
 				"Pods are rescheduled onto other nodes.",
@@ -2515,6 +2753,58 @@ func (m *Model) runSlash(cmd string) tea.Cmd {
 			m.toast = "row filter: " + arg
 		}
 		return nil
+	case ":chart":
+		m.focus = focusMain
+		m.input.Blur()
+		m.chart = !m.chart
+		if m.chart {
+			// The chart plots the same window the sparkline samples, so
+			// turning it on turns sampling on: there is one store, and
+			// nothing feeds it unless something is reading it.
+			m.spark = true
+			m.observeMetrics()
+			m.toast = "chart on · the shape fills in over the next few refreshes"
+		} else {
+			m.toast = "chart off"
+		}
+		return nil
+	case ":spark":
+		m.focus = focusMain
+		m.input.Blur()
+		m.spark = !m.spark
+		if m.spark {
+			m.observeMetrics()
+			m.toast = "sparklines on — the shape fills in over the next few refreshes"
+		} else {
+			// Drop the windows rather than keep feeding something nobody is
+			// looking at.
+			m.hist = nil
+			m.toast = "sparklines off"
+		}
+		return nil
+	case ":group":
+		kind := m.curKind().Key
+		m.focus = focusMain
+		m.input.Blur()
+		if arg == "" {
+			m.setGroup(kind, groupNone)
+			m.toast = "grouping off"
+			return nil
+		}
+		g := groupKey(arg)
+		if !slices.Contains(groupKeys, g) {
+			m.toast = "unknown group: " + arg + " — try owner, node, namespace, status"
+			return nil
+		}
+		m.setGroup(kind, g)
+		// Say plainly when the key is right but this kind cannot answer it,
+		// rather than leaving a flat table and no explanation.
+		if gcols, _ := m.tableData(); groupColumn(gcols, m.curKind(), g, m.namespace) < 0 {
+			m.toast = arg + " is not something " + m.res().Name + " can group by here"
+			return nil
+		}
+		m.toast = "group → " + arg
+		return nil
 	case "/demo":
 		m.closePrompt()
 		if m.demoMode() {
@@ -2744,10 +3034,17 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	if m.palOpen {
-		for i := range m.paletteHits() {
+		// Asked once, not once per candidate and again to act: paletteHits
+		// walks every loaded kind's rows, and this was calling it twice per
+		// click on top of the once-per-frame the overlay already costs.
+		hits := m.paletteHits()
+		for i, h := range hits {
 			if getZone(fmt.Sprintf("pal:%d", i)).inBounds(msg) {
 				m.palIdx = i
-				m.gotoHit(m.paletteHits()[i])
+				if h.action != nil {
+					return m.fireHit(h)
+				}
+				m.gotoHit(h)
 				return nil
 			}
 		}
@@ -2861,7 +3158,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	_, curRows := m.tableData()
+	curCols, curRows := m.tableData()
+	// Headers first: they sit above the rows and a click on one cycles the
+	// sort through ascending, descending and back to the backend's order.
+	if m.mode == modeTable {
+		for ci := range curCols {
+			if getZone(fmt.Sprintf("hdr:%d", ci)).inBounds(msg) {
+				m.focus = focusMain
+				m.cycleSort(m.curKind().Key, ci)
+				cols, _ := m.tableData()
+				m.toast = m.sortToast(cols)
+				return nil
+			}
+		}
+	}
 	for i := range curRows {
 		if getZone(fmt.Sprintf("row:%d", i)).inBounds(msg) {
 			m.focus = focusMain

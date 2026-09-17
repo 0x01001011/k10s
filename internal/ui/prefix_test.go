@@ -219,8 +219,14 @@ func TestDoubleClickOpensRow(t *testing.T) {
 	dismissOnboarding(m)
 	m.View() // register zones
 
-	l := m.layout()
-	x, y := l.leftW+5, l.midY+3
+	// Aim at the first row's own zone rather than at a fixed offset from the
+	// panel top: a group header can occupy that line (T42), and the thing
+	// under test is the row, not the geometry.
+	z := getZone("row:0")
+	if !z.ok {
+		t.Fatal("row:0 was not marked")
+	}
+	x, y := z.x+5, z.y
 
 	// First click selects only.
 	m.handleMouse(clickAt(x, y))

@@ -13,8 +13,10 @@ import (
 )
 
 func (m *Model) View() string {
-	// One kind list per frame; see Model.kindsMemo.
+	// One kind list and one row build per frame; see Model.kindsMemo and
+	// Model.rowsMemo.
 	m.kindsMemo = nil
+	m.rowsMemo = nil
 	if m.w < 10 || m.h < 8 {
 		return ""
 	}
@@ -65,22 +67,87 @@ func (m *Model) View() string {
 
 // ---- header (borderless): identity + cluster totals -----------------------
 
-func gauge(th theme.Theme, pct, width int) string {
-	col := th.Ok
-	switch {
-	case pct >= 85:
-		col = th.Err
-	case pct >= 60:
-		col = th.Warn
+// gauge is bar() — see gauge.go. Kept as a name because the header reads
+// better for it.
+func gauge(th theme.Theme, pct, width int) string { return bar(th, pct, width) }
+
+// hseg is one header segment: the styled string, its width without styling,
+// and how readily it is given up when the terminal is narrow.
+//
+// Segments are dropped whole. The header used to be assembled at full length
+// and then cut by the block, which at 80 columns reported a node count of
+// "nodes" and a memory total of "81" — and left the ns and theme buttons
+// marked as click targets off the right-hand edge, so the mouse affordance
+// died without saying so.
+type hseg struct {
+	render string
+	plain  string
+	prio   int
+	// lead is the separator drawn before this segment, and is emitted only
+	// when something precedes it — otherwise a dropped first segment leaves
+	// the header opening on a bare "  │  ".
+	lead      string
+	leadPlain string
+}
+
+// fitSegs drops the lowest-priority segments until the rest fit in width,
+// then joins the survivors in their original order. It returns the joined
+// string and the width it actually occupies.
+//
+// Dropping is by priority rather than by position because position is not
+// importance: the version sits between the context name and the node count
+// and is the first thing nobody reads during an incident.
+func fitSegs(segs []hseg, width int) (string, int) {
+	keep := make([]bool, len(segs))
+	for i := range segs {
+		keep[i] = true
 	}
-	filled := pct * width / 100
-	if filled > width {
-		filled = width
+
+	// width() is recomputed rather than adjusted, because dropping the first
+	// kept segment also drops a separator that was not being counted.
+	width_ := func() int {
+		total, first := 0, true
+		for i, s := range segs {
+			if !keep[i] {
+				continue
+			}
+			if !first {
+				total += lipgloss.Width(s.leadPlain)
+			}
+			total += lipgloss.Width(s.plain)
+			first = false
+		}
+		return total
 	}
-	on := paint(th.Bg, col, false, strings.Repeat("▰", filled))
-	off := paint(th.Bg, th.Border, false, strings.Repeat("▱", width-filled))
-	num := paint(th.Bg, col, false, fmt.Sprintf("%3d%%", pct))
-	return on + off + " " + num
+
+	for width_() > width {
+		worst, worstPrio := -1, 0
+		for i, s := range segs {
+			if keep[i] && (worst < 0 || s.prio < worstPrio) {
+				worst, worstPrio = i, s.prio
+			}
+		}
+		if worst < 0 {
+			break
+		}
+		keep[worst] = false
+	}
+
+	var b strings.Builder
+	out, first := 0, true
+	for i, s := range segs {
+		if !keep[i] {
+			continue
+		}
+		if !first {
+			b.WriteString(s.lead)
+			out += lipgloss.Width(s.leadPlain)
+		}
+		b.WriteString(s.render)
+		out += lipgloss.Width(s.plain)
+		first = false
+	}
+	return b.String(), out
 }
 
 func (m *Model) viewHeader(l layout) Block {
@@ -138,26 +205,63 @@ func (m *Model) viewHeader(l layout) Block {
 		demoTag = paint(th.Bg, th.Warn, true, " DEMO") +
 			paint(th.Bg, th.Subtle, false, " sample data · :ctx to leave")
 	}
-	line0 := brand + sep + paint(th.Bg, ctxCol, false, ctxTxt) + demoTag +
-		sep + paint(th.Bg, th.Subtle, false, "ver ") + paint(th.Bg, th.Fg, false, ci.Version) +
-		sep + paint(th.Bg, th.Subtle, false, "nodes ") + paint(th.Bg, nodeCol, false, nodeTxt)
+	// A narrow terminal cannot afford three five-cell separators of pure
+	// decoration, and the demo banner shrinks to the one word that matters —
+	// it still has to be on every frame, because every figure above it is
+	// sample data.
+	sepPlain := "  │  "
+	if m.w < 120 {
+		sepPlain = " · "
+		sep = paint(th.Bg, th.Border, false, sepPlain)
+	}
+	demoPlain := ""
+	if m.demoMode() {
+		demoPlain = " DEMO sample data · :ctx to leave"
+		if m.w < 120 {
+			demoPlain = " DEMO"
+			demoTag = paint(th.Bg, th.Warn, true, demoPlain)
+		}
+	}
 
 	// Right-hand buttons: namespace, then theme. Both are clickable and
 	// both say what they currently are, so the header doubles as status.
-	nsPlain := "ns " + m.namespace + " ▾"
 	nsBtn := m.mark("nsbtn", paint(th.Bg, th.Subtle, false, "ns ")+paint(th.Bg, th.Accent2, false, m.namespace)+paint(th.Bg, th.Subtle, false, " ▾"))
-
-	themePlain := "theme " + m.th().Name + " ⟳"
 	themeTag := m.mark("theme", paint(th.Bg, th.Subtle, false, "theme ")+paint(th.Bg, th.Accent, false, m.th().Name)+paint(th.Bg, th.Subtle, false, " ⟳"))
 
-	right := nsBtn + paint(th.Bg, th.Border, false, "  │  ") + themeTag
-	rightPlain := nsPlain + "  │  " + themePlain
+	// Every segment carries its own leading separator, so dropping one drops
+	// its separator with it. Priorities say what survives a narrow terminal:
+	// which cluster you are pointed at outranks the product name, and the
+	// version is the first thing nobody is reading during an incident.
+	lead := func(s hseg) hseg { s.lead, s.leadPlain = sep, sepPlain; return s }
+	leftSegs := []hseg{
+		{render: brand, plain: " ⎈ k10s", prio: 60},
+		lead(hseg{render: paint(th.Bg, ctxCol, false, ctxTxt), plain: ctxTxt, prio: 100}),
+		// The demo tag is its own segment. Folded into the context segment it
+		// would outrank everything on the line and then be dropped as a unit,
+		// taking the context name with it and leaving a header that says
+		// nothing at all.
+		{render: demoTag, plain: demoPlain, prio: 97},
+		lead(hseg{render: paint(th.Bg, th.Subtle, false, "ver ") + paint(th.Bg, th.Fg, false, ci.Version), plain: "ver " + ci.Version, prio: 20}),
+		// Node readiness outranks the namespace button: the namespace is also
+		// in the main panel title, whereas nothing else says a node is down.
+		lead(hseg{render: paint(th.Bg, th.Subtle, false, "nodes ") + paint(th.Bg, nodeCol, false, nodeTxt), plain: "nodes " + nodeTxt, prio: 95}),
+	}
+	rightSegs := []hseg{
+		{render: nsBtn, plain: "ns " + m.namespace + " ▾", prio: 90},
+		lead(hseg{render: themeTag, plain: "theme " + m.th().Name + " ⟳", prio: 30}),
+	}
 
-	gapw := inner - lipgloss.Width(line0) - lipgloss.Width(rightPlain)
+	// The buttons are the only mouse affordance up here, so they get their
+	// half of the line first; whatever they do not use goes to the identity
+	// segments, and at least one column stays between the two.
+	right, rightW := fitSegs(rightSegs, inner/2)
+	left, leftW := fitSegs(leftSegs, maxi(0, inner-rightW-1))
+
+	gapw := inner - leftW - rightW
 	if gapw < 1 {
 		gapw = 1
 	}
-	line0 += paint(th.Bg, th.Bg, false, spaces(gapw)) + right
+	line0 := left + paint(th.Bg, th.Bg, false, spaces(gapw)) + right
 
 	// Both gauges carry a direction arrow after the percentage. Only real
 	// readings are tracked: with no nodes the totals are placeholders, and
@@ -166,13 +270,30 @@ func (m *Model) viewHeader(l layout) Block {
 		m.cpuTrend.observe(cpuPct, m.anim)
 		m.memTrend.observe(memPct, m.anim)
 	}
-	totals := paint(th.Bg, th.Subtle, true, " CPU  ") + gauge(th, cpuPct, 16) +
+	// The gauges shrink before they clip, and the absolute figures are the
+	// first thing to go: "18.4/48 cores" is context, the percentage and the
+	// bar are the reading. At 80 columns the old fixed pair needed 82 cells
+	// for a 74-cell row, which is how "81.9/192.0 GiB" became "81".
+	gw := 16
+	figures := true
+	switch {
+	case m.w < 96:
+		gw, figures = 6, false
+	case m.w < 120:
+		gw, figures = 10, false
+	}
+	cores, gib := "", ""
+	if figures {
+		cores = fmt.Sprintf("  %.1f/%.0f cores", usedCores, totalCores)
+		gib = fmt.Sprintf("  %.1f/%.1f GiB", usedGiB, totalGiB)
+	}
+	totals := paint(th.Bg, th.Subtle, true, " CPU  ") + gauge(th, cpuPct, gw) +
 		paint(th.Bg, th.Bg, false, " ") + trendGlyph(th, th.Bg, m.cpuTrend.arrow(m.anim)) +
-		paint(th.Bg, th.Subtle, false, fmt.Sprintf("  %.1f/%.0f cores", usedCores, totalCores)) +
+		paint(th.Bg, th.Subtle, false, cores) +
 		paint(th.Bg, th.Bg, false, "    ") +
-		paint(th.Bg, th.Subtle, true, "MEM  ") + gauge(th, memPct, 16) +
+		paint(th.Bg, th.Subtle, true, "MEM  ") + gauge(th, memPct, gw) +
 		paint(th.Bg, th.Bg, false, " ") + trendGlyph(th, th.Bg, m.memTrend.arrow(m.anim)) +
-		paint(th.Bg, th.Subtle, false, fmt.Sprintf("  %.1f/%.1f GiB", usedGiB, totalGiB))
+		paint(th.Bg, th.Subtle, false, gib)
 	// nn is clamped to 1 so the averages above cannot divide by zero, which
 	// with no nodes at all would print "0.0/16 cores" — a capacity figure for
 	// a cluster that isn't there. Say nothing instead.
@@ -184,11 +305,35 @@ func (m *Model) viewHeader(l layout) Block {
 	// paint(th.Bg, th.Bg, false, "    ") +
 	// paint(th.Bg, th.Subtle, false, "per-node view → Resources ▸ Nodes")
 
-	lines := []string{
-		line0,
-		"",
-		totals,
-		paint(th.Bg, th.Border, false, spaces(1)+strings.Repeat("╌", maxi(1, inner))),
+	// Four rows when there is room; otherwise the blank and the rule go
+	// first, and below 96 the identity and the gauges share one row. See
+	// headerRows.
+	var lines []string
+	switch l.headerH {
+	case 1:
+		// One row: whatever of the identity and the buttons survives, then
+		// the gauges hard right — they are the only thing up here that
+		// changes second to second. The ns button competes on the same line
+		// rather than being dropped outright, because it is the only mouse
+		// affordance in the header and it also states the current namespace.
+		gaugesW := lipgloss.Width(" CPU  ") + barWidth(gw) + 2 + 4 + lipgloss.Width("MEM  ") + barWidth(gw) + 2
+		// On a two-part line the gap separates the groups, so rightSegs[0]
+		// carries no separator of its own; on one line it needs one.
+		oneRow := append(append([]hseg{}, leftSegs...), lead(rightSegs[0]))
+		oneRow = append(oneRow, rightSegs[1:]...)
+
+		head, headW := fitSegs(oneRow, maxi(0, inner-gaugesW-1))
+		pad := maxi(1, inner-headW-gaugesW)
+		lines = []string{head + paint(th.Bg, th.Bg, false, spaces(pad)) + totals}
+	case 2:
+		lines = []string{line0, totals}
+	default:
+		lines = []string{
+			line0,
+			"",
+			totals,
+			paint(th.Bg, th.Border, false, spaces(1)+strings.Repeat("╌", maxi(1, inner))),
+		}
 	}
 	return BlockOf(m.w, l.headerH, lines, th.Bg)
 }
@@ -363,8 +508,9 @@ func colorOf(cond bool, a, b lipgloss.Color) lipgloss.Color {
 
 // ---- center: table / text -------------------------------------------------
 
-// fitCols sizes the visible columns for avail cells. Columns are dropped from
-// the right (never the first one) before the name column gets crushed.
+// fitCols sizes the visible columns for avail cells. Columns are dropped by
+// priority (never the first one) before the name column gets crushed — see
+// colPriority in columns.go for why position is the wrong answer.
 //
 // extra[ci] is the number of cells a column spends on decoration inside its
 // own width — a trend arrow, a severity glyph. It is reserved here, once, from
@@ -380,7 +526,11 @@ func fitCols(cols []string, rows [][]string, extra []int, avail, gap int) ([]int
 		if ok || len(keep) <= 2 {
 			return w, keep
 		}
-		keep = keep[:len(keep)-1]
+		d := dropIndex(cols, keep)
+		if d < 0 {
+			return w, keep
+		}
+		keep = append(keep[:d], keep[d+1:]...)
 	}
 }
 
@@ -391,8 +541,14 @@ func tryFit(cols []string, rows [][]string, extra, keep []int, avail, gap int) (
 	for k, ci := range keep {
 		nat[k] = 0
 		for _, r := range rows {
-			if ci < len(r) && len(r[ci]) > nat[k] {
-				nat[k] = len(r[ci])
+			// Display cells, not bytes. Cells are padded and cut by display
+			// width further down, so measuring len() here over-reserved for
+			// any non-ASCII value — an event message, an i18n namespace — and
+			// pushed real columns off the right-hand edge.
+			if ci < len(r) {
+				if w := lipgloss.Width(r[ci]); w > nat[k] {
+					nat[k] = w
+				}
 			}
 		}
 		// Decoration widens the values, never the header: a header already
@@ -400,15 +556,28 @@ func tryFit(cols []string, rows [][]string, extra, keep []int, avail, gap int) (
 		if ci < len(extra) {
 			nat[k] += extra[ci]
 		}
-		if h := len(cols[ci]); h > nat[k] {
+		if h := lipgloss.Width(cols[ci]); h > nat[k] {
 			nat[k] = h
 		}
 		m := 7
 		if ci == 0 {
-			m = 18
+			// The identity column asks for its whole natural width, capped.
+			// A flat floor of 18 made tryFit *succeed* by crushing NAME, so
+			// the drop loop never ran: the table showed seven columns with
+			// `api-gateway-7d9f4…` in the one that says which pod this is.
+			// Asking for the real width makes the fit fail instead, which is
+			// what drops a column nobody was reading.
+			m = clamp(nat[k], 18, identityMaxMin)
 		}
 		if cols[ci] == "NAMESPACE" {
 			m = 9 // short values (kube-system, cert-manager…); leave room for NAME
+		}
+		// A column narrower than its own header renders `RESTAR…`, which
+		// names nothing. If it cannot afford its header it should leave the
+		// screen instead, which is what the drop loop is for — so the header
+		// width is a floor, and nat is always at least that wide already.
+		if h := lipgloss.Width(cols[ci]); h > m {
+			m = h
 		}
 		if m > nat[k] {
 			m = nat[k]
@@ -419,11 +588,19 @@ func tryFit(cols []string, rows [][]string, extra, keep []int, avail, gap int) (
 	for _, x := range nat {
 		total += x
 	}
+	// Take the next cell from the column with the largest width per unit of
+	// weight, not the largest width outright. Compared as a cross-product so
+	// the loop stays in integers.
 	for total > avail {
-		bi, bv := -1, 0
+		bi := -1
+		var bn, bw int
 		for i := range nat {
-			if nat[i] > min[i] && nat[i] > bv {
-				bi, bv = i, nat[i]
+			if nat[i] <= min[i] {
+				continue
+			}
+			w := colWeight(cols[keep[i]])
+			if bi < 0 || nat[i]*bw > bn*w {
+				bi, bn, bw = i, nat[i], w
 			}
 		}
 		if bi < 0 {
@@ -450,6 +627,13 @@ func allDigits(s string) bool {
 var statusColors = map[string]string{
 	"Running": "ok", "Ready": "ok", "Active": "ok", "Bound": "ok", "True": "ok", "Normal": "ok",
 	"Completed": "subtle", "False": "subtle", "<none>": "subtle", "-": "subtle",
+	// The sentinel vocabulary. A bare "-" used to mean unknown, unset,
+	// defaulted, not-applicable and pending all at once, all dimmed, so five
+	// different states read as one settled value. Each word now says which
+	// state it is, and only the one that is actually waiting on something
+	// gets graded.
+	"n/a": "subtle", "<cluster>": "subtle",
+	"pending": "warn", "lost": "err",
 	"Pending": "warn", "Terminating": "warn", "ContainerCreating": "warn", "Warning": "warn", "NotReady": "err",
 	"CrashLoopBackOff": "err", "Error": "err", "ImagePullBackOff": "err", "Failed": "err", "Evicted": "err",
 }
@@ -632,6 +816,21 @@ func (m *Model) viewMain(w, h int) Block {
 		nsLabel = "all namespaces"
 	}
 
+	// The tree takes the panel. It is a different shape from the table — no
+	// columns, no row numbers, its own cursor — so it renders its own body
+	// rather than pretending to be a table with indentation.
+	if m.treeOpen() {
+		closeTag := m.mark("close", brk.Render("[ ")+tagStyle.Render("t to close")+brk.Render(" ]"))
+		title := "Owner tree · " + nsLabel
+		if m.rowSearch != "" {
+			title += " · find: " + m.rowSearch
+		}
+		return Panel(th, PanelOpts{
+			Title: title, Tag: closeTag + brk.Render(" ") + zoomTag,
+			TagPlain: "[ t to close ] " + zoomPlain, Focused: focused, W: w, H: h,
+		}, m.treeBody(inner, h-2))
+	}
+
 	// The search box only takes space while it's actually in use. Reserving
 	// two rows permanently cost two rows of data on every screen for a box
 	// that is empty most of the time.
@@ -641,12 +840,26 @@ func (m *Model) viewMain(w, h int) Block {
 	if searching {
 		bodyH -= 2
 	}
+	// The chart takes rows from the table rather than overlaying it: a plot
+	// you cannot see the rows behind answers a different question than the
+	// one that was asked.
+	chartH := 0
+	if m.chart {
+		chartH = clamp(bodyH/3, 0, 10)
+		if chartH < 4 {
+			chartH = 0 // below four rows there is no shape left to read
+		}
+	}
+	bodyH -= chartH
 	if bodyH < 1 {
 		bodyH = 1
 	}
 	body := m.tableBody(inner, bodyH)
 	for len(body) < bodyH {
 		body = append(body, "")
+	}
+	if chartH > 0 {
+		body = append(body, m.chartLines(inner, chartH)...)
 	}
 	if searching {
 		body = append(body, lipgloss.NewStyle().Background(th.Bg).Foreground(th.Border).Render(strings.Repeat("╌", inner)))
@@ -664,14 +877,25 @@ func (m *Model) viewMain(w, h int) Block {
 		title += " · find: " + m.rowSearch
 	}
 
+	tag, tagPlain := zoomTag, zoomPlain
+
 	// Advertise the find key next to zoom, since there is no visible search
 	// box to hint at it any more.
-	tag, tagPlain := zoomTag, zoomPlain
 	if !searching {
 		findHint := m.mark("tablesearch", brk.Render("[ ")+tagStyle.Render("f")+
 			lipgloss.NewStyle().Background(th.Bg).Foreground(th.Subtle).Render(" to search")+brk.Render(" ]"))
 		tag = findHint + brk.Render(" ") + zoomTag
 		tagPlain = "[ f to search ] " + zoomPlain
+	}
+
+	// Where you are in the list. The text view has carried this since it was
+	// written ("38/66  57%") and the table never did, so scrolling a long
+	// namespace gave no sense of depth at all. Prepended after the block
+	// above, which reassigns tag wholesale.
+	if _, rows := m.tableData(); len(rows) > 0 {
+		pos := fmt.Sprintf("%d/%d", clamp(m.rowIdx+1, 1, len(rows)), len(rows))
+		tag = paint(th.Bg, th.Subtle, false, pos) + brk.Render(" ") + tag
+		tagPlain = pos + " " + tagPlain
 	}
 
 	return Panel(th, PanelOpts{
@@ -822,10 +1046,25 @@ func (m *Model) tableBody(inner, rows int) []string {
 		return t.arrow(m.anim)
 	}
 
+	srt := m.sortFor(m.curKind().Key)
 	var hdr strings.Builder
 	hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gutter)))
 	for k, ci := range keep {
-		hdr.WriteString(paint(th.Bg, th.Subtle, true, pad(trunc(cols[ci], widths[k]), widths[k])))
+		label, col := cols[ci], th.Subtle
+		if ci == srt.col {
+			// The arrow goes inside the column's own width, never on top of
+			// it: tryFit floors a column at its header width, so widening
+			// the header for an indicator would let the indicator push a
+			// column off the screen.
+			col = th.Accent
+			if w := widths[k] - 2; w > 0 {
+				label = trunc(label, w) + " " + sortArrow(srt.desc)
+			}
+		}
+		cell := paint(th.Bg, col, true, pad(trunc(label, widths[k]), widths[k]))
+		// Marked per column index, not per name: zone ids have to come from
+		// a bounded set or the id table becomes a per-session leak.
+		hdr.WriteString(m.mark(fmt.Sprintf("hdr:%d", ci), cell))
 		if k < len(keep)-1 {
 			hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gap)))
 		}
@@ -845,9 +1084,31 @@ func (m *Model) tableBody(inner, rows int) []string {
 		visible = 1
 	}
 	m.rowScroll = clamp(m.rowScroll, 0, maxi(0, len(allRows)-visible))
-	end := clamp(m.rowScroll+visible, 0, len(allRows))
 
-	for i := m.rowScroll; i < end; i++ {
+	// Group headers and folded rows both change how many table rows one
+	// screen row buys, so the window is filled by budget rather than by a
+	// fixed end index. Without grouping this is the old loop exactly.
+	spans := m.groupSpans(cols, allRows)
+	gkey := m.groupFor(m.curKind().Key)
+	end := clamp(m.rowScroll+visible, 0, len(allRows))
+	if len(spans) > 0 {
+		end = len(allRows)
+	}
+
+	for i := m.rowScroll; i < end && len(out)-2 < visible; i++ {
+		if s, ok := spanAt(spans, i); ok && i == s.first {
+			folded := m.collapsedRows[m.groupStateKey()][s.value]
+			holds := m.rowIdx >= s.first && m.rowIdx < s.first+s.count
+			out = append(out, m.mark(fmt.Sprintf("rgrp:%d", s.first),
+				padBG(m.rowGroupHeader(gkey, s, folded, holds && folded, inner), inner, th.Bg)))
+			if len(out)-2 >= visible {
+				break
+			}
+		}
+		if m.rowCollapsed(spans, i) {
+			continue
+		}
+
 		row := allRows[i]
 		sel := i == m.rowIdx
 		bg := th.Bg
@@ -888,10 +1149,18 @@ func (m *Model) tableBody(inner, rows int) []string {
 			// it, so the value keeps its own width and the row still adds
 			// up to rowW.
 			w := widths[k]
-			if ci < len(extra) && extra[ci] > 0 && !metric[ci] {
+			metricCol := ci < len(metric) && metric[ci]
+			grade := severityGlyph(lvl)
+			// A metric column spends its two reserved cells on the trend
+			// arrow — but a graded sentinel like `pending` has no trend to
+			// report, and leaving it unmarked would make it the one cell in
+			// the table carrying severity in colour alone. It takes the
+			// glyph instead, in the same two cells.
+			glyphed := ci < len(extra) && extra[ci] > 0 && (!metricCol || grade != "")
+			if glyphed {
 				// The whole column spends the two cells, glyph or not, so
 				// an ungraded value still lines up under a graded one.
-				g := severityGlyph(lvl)
+				g := grade
 				if g == "" {
 					g = "  "
 				}
@@ -905,10 +1174,23 @@ func (m *Model) tableBody(inner, rows int) []string {
 			switch {
 			case ci < len(cols) && cols[ci] == nameCol && sel:
 				b.WriteString(paint(bg, col, true, cell))
-			case ci < len(metric) && metric[ci] && w > 2:
-				// Value, then the arrow in the two reserved cells.
-				cell = pad(trunc(v, w-2), w-2)
+			case metricCol && !glyphed && w > 2:
+				// Value, then the arrow in the two reserved cells. With
+				// sparklines on, the shape goes between them: the newest
+				// sample sits next to the number it explains.
+				var sp string
+				if m.spark && nameIdx >= 0 && nameIdx < len(row) {
+					if s := m.rowSpark(m.curKind().Key, m.rowNamespace(row, cols), row[nameIdx]); len(s) > 1 {
+						sp = spark(th, s, cellLevel("", v))
+					}
+				}
+				spw := lipglossWidthOf(sp)
+				if spw+3 > w {
+					sp, spw = "", 0
+				}
+				cell = pad(trunc(v, w-2-spw), w-2-spw)
 				b.WriteString(paint(bg, col, false, cell))
+				b.WriteString(sp)
 				b.WriteString(paint(bg, bg, false, " "))
 				b.WriteString(trendGlyph(th, bg, arrowFor(row, ci)))
 			default:
@@ -956,7 +1238,9 @@ func (m *Model) viewActions(w, h int) Block {
 		}
 		return Panel(th, PanelOpts{Title: "Actions", Focused: false, W: w, H: h}, lines)
 	}
-	r := m.res()
+	// The pane lists what the SELECTED object can do, which in the tree is
+	// the node under the cursor rather than the sidebar's kind.
+	r := m.targetKind()
 
 	// With no cluster there is no object under the cursor, so every action
 	// in this pane would be a button that only produces an error. The pane

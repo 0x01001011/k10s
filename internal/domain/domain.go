@@ -90,6 +90,28 @@ type Kind struct {
 	Namespaced bool
 	Cols       []string
 	Allowed    []string
+
+	// Meta names cells each row carries past len(Cols): values the UI needs
+	// but does not draw. Grouping reads them (T42).
+	//
+	// They are not columns. A group key has to be a value already sitting in
+	// the row, because deriving one per row at render time is exactly the
+	// per-row work the render path forbids — but making OWNER a real column
+	// would put a cell nobody asked for on every pod table, and hiding it
+	// again needs a visibility mechanism that does not exist yet. Appended
+	// here instead, indexed len(Cols)+i, and ignored by every renderer
+	// because they all walk Cols.
+	Meta []string
+}
+
+// MetaIndex is where the meta value named key sits in a row, or -1.
+func (k Kind) MetaIndex(key string) int {
+	for i, m := range k.Meta {
+		if m == key {
+			return len(k.Cols) + i
+		}
+	}
+	return -1
 }
 
 func (k Kind) Can(id string) bool {

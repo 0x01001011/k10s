@@ -15,12 +15,150 @@ TOP BANNER (no border, 4 rows incl. dashed rule)
 status bar (toast · key hints)
 ```
 
-Geometry (`layout()`): banner 4 rows, prompt 3, status 1, middle gets the
-rest. Left/right panes are 22/24 cols (18/20 under 96 cols; 0 when zoomed).
-Below 72×22 the UI is replaced by a "terminal too small" notice.
+Geometry (`layout()`): prompt 3 rows, status 1, middle gets the rest. The
+banner and the side panes are budgeted by width, because at 80×24 the fixed
+sizes spent a third of the rows and 47% of the columns on chrome:
+
+| Width | Banner | Left | Right | Gauges |
+|---|---|---|---|---|
+| ≥ 120 | 4 rows | 22 | 24 | 16 wide, with `18.4/48 cores` |
+| 96–119 | 2 rows (no blank, no rule) | 18 | 20 | 10 wide, no figures |
+| < 96 | 1 row (identity and gauges share it) | 18 | 0 | 6 wide, no figures |
+
+`z` still collapses both panes at any width. Below 72×22 the UI is replaced
+by a "terminal too small" notice.
+
+**The banner never clips mid-token.** Each part of the top line is a segment
+with a priority (`hseg` / `fitSegs` in `view.go`), and a terminal too narrow
+for all of them drops whole segments, lowest priority first — it does not cut
+the line. Dropping order, least important first: version, product name, theme
+button, namespace button, node readiness, demo tag, context name. The
+namespace outranks the theme because it is also the mouse affordance; node
+readiness outranks the namespace button because the namespace is already in
+the main panel title while nothing else reports a node down. A dropped button
+is not marked as a click target, so a mouse affordance never outlives its own
+label.
 
 Neither side pane spends rows on a permanent search box — see *Search boxes*
 below.
+
+## Row groups
+
+Pods open grouped under their owner, Events under their object; every other
+kind is flat. A header names the Deployment and the ReplicaSet it was derived
+from (`▾ web-frontend · rs 6b8c7d9f5 … 3`) and carries the count of rows
+beneath it.
+
+The owner costs nothing to know: `ownerReferences` is already on the pod, and
+the Deployment name is recovered from the ReplicaSet's pod-template-hash
+suffix rather than looked up — so opening Pods still starts exactly one watch.
+Where a name does not have that shape (a StatefulSet member, a bare pod) the
+owner name is printed as-is; a Deployment name is never guessed.
+
+This is **one level of headers over a flat row slice**, not a tree. Row
+numbers stay continuous and count objects, so folding a group does not
+renumber the rows below it; selection stays an index into the same flat slice,
+so `curRow`, the Actions pane and every action are untouched; and headers are
+never selectable. The nested tree is a separate, opt-in view (plan card T46);
+the multi-hop relationship tree is already `X`.
+
+| | |
+|---|---|
+| `space` | fold / unfold the group under the cursor |
+| click a `▾`/`▸` header | either |
+| `:group <key>` | `owner`, `node`, `namespace`, `status`, `object`; bare `:group` turns it off |
+
+Rules, all shared with the sidebar's own folding:
+
+- **A search ignores folding entirely.** Every match renders wherever it is —
+  a match hidden behind a fold would make the filter look broken.
+- A folded group holding the cursor keeps its marker, so "where am I" never
+  becomes a guess. Arrow keys skip folded rows.
+- **Sorting and grouping are exclusive.** Sorting states the whole table's
+  order and grouping states its shape; honouring both would sort within
+  groups, which answers neither question. A sort drops the table to flat.
+- Grouping falls back to flat, silently, when the kind has no such column,
+  when there are fewer than two distinct values, above 40 groups, or above
+  2000 rows.
+
+The group key persists per kind (`group:` in [config.md](config.md)). Which
+groups are folded does **not** — unlike a folded sidebar group, which stops
+that kind being counted, a folded row group saves nothing, so restoring a
+session with half the pods hidden would be a surprise rather than a
+preference.
+
+## The owner tree (`t`)
+
+Grouping is one level over a flat list. `t` opens the other thing: a real
+Deployment → ReplicaSet → Pod tree where every node is an object.
+
+```
+▌deploy/api-gateway  2/2
+ └─ rs/api-gateway-7d9f4c8b6d  2
+    ├─ po/api-gateway-7d9f4c8b6d-2xk4p  + Running
+    └─ po/api-gateway-7d9f4c8b6d-hv8qz  + Running
+ deploy/billing-worker  ! 0/1
+ └─ rs/billing-worker-6f8d9c5b7  0
+    └─ po/billing-worker-6f8d9c5b7-qq91x  x CrashLoopBackOff
+```
+
+Each row carries its kind, because three kinds share one list and indentation
+alone does not say which is which. **Actions follow the node under the cursor**
+— `d` on a Deployment describes the Deployment, `l` on a pod reads its logs —
+and the Actions pane lists what that node can do. The sidebar's kind still
+drives the table underneath, so closing the tree puts you back where you were.
+
+It is opt-in, and second on purpose. Most of what people want from "show me
+the tree" is answered by grouping; the part that is not is the part that
+costs. A tree needs the ReplicaSet and Deployment **objects**, which means
+informers that opening Pods deliberately does not start — so `t` starts them,
+on the keypress, and says so in the toast. Opening Pods still watches exactly
+one kind.
+
+- **A filter keeps the ancestors of every match**, dimmed and unselectable.
+  Dropping them would lie about the shape; offering them as results would lie
+  about what matched. That fork is the cost of a tree, and is why the flat
+  list stays the default.
+- **Row numbers are replaced by the branch drawing.** A number exists to
+  address a row, and in a tree it stops referring to anything stable as soon
+  as something above it is filtered.
+- Pods with no Deployment above them — StatefulSet members, Job pods, bare
+  pods — are listed at the root rather than hidden.
+- Above 300 objects the tree **refuses to open** and says so. A tree that
+  quietly stops is indistinguishable from a cluster that really is that small.
+
+`X` is a different view: it walks the relationships a *lens pack* declares,
+into the read-only text panel. `t` is built-in ownership, in the table, with a
+cursor.
+
+## Meters, sparklines and the chart
+
+Every meter follows one rule: **length or height carries the magnitude, colour
+only grades it, and a glyph always repeats the grade.** Red against green is
+the worst pair for deuteranopia, so nothing is colour-only.
+
+The cluster gauges are block-eighths on a dotted trough, with a leading grade
+mark (`·` ok, `!` warn, `×` err) and ticks at the 60% and 85% thresholds:
+
+```
+ CPU  ·██████···┊···┊··  38%    18.4/48 cores
+```
+
+`:spark` adds an eight-sample CPU sparkline to the table, and `:chart` plots
+the same window as a braille chart under it — 2×4 dots per cell, so a 60×8
+panel carries 120 points over 32 steps. Both read one store, sampled on the
+repaint tick and never from the render path: `View` runs per keystroke and
+only over visible rows, so a series fed from there would append duplicates
+while you typed, nothing while you idled, and miss every row scrolled past.
+
+The window is 64 samples — about sixteen minutes at the backend's 15s metrics
+refresh. A sentinel reading is skipped rather than stored as zero: a pending
+pod has no CPU, which is not the same as a dip. An empty window says it is
+still sampling rather than drawing an empty box.
+
+`K10S_ASCII=1`, or a locale that has not said it speaks UTF-8, switches every
+glyph above to an ASCII ladder — chosen once at startup, because a frame that
+mixes the two sets is worse than a plain one.
 
 ## Top banner (borderless)
 

@@ -5,6 +5,8 @@
 package mock
 
 import (
+	"strings"
+
 	"github.com/0x01001011/k10s/internal/domain"
 )
 
@@ -65,7 +67,12 @@ var contexts = []string{
 var resourceFixtures = []resourceDef{
 	{
 		Kind: domain.Kind{Key: "pods", Name: "Pods", Short: "po", Group: "Workloads", Namespaced: true,
-			Cols: []string{"NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "NODE", "AGE"}, Allowed: podActions},
+			Cols: []string{"NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "NODE", "AGE"}, Allowed: podActions,
+			// T42. The cell itself is filled in by fillPodOwners rather than
+			// written into each row literal: the demo pods are named the way
+			// Kubernetes names them, so the owner is already implied by the
+			// name and repeating it twenty-one times invites the two to drift.
+			Meta: []string{"OWNER"}},
 		Rows: [][]string{
 			{"api-gateway-7d9f4c8b6d-2xk4p", "1/1", "Running", "0", "142m", "310Mi", "ip-10-0-2-88", "6d"},
 			{"api-gateway-7d9f4c8b6d-hv8qz", "1/1", "Running", "0", "128m", "298Mi", "ip-10-0-1-14", "6d"},
@@ -76,7 +83,7 @@ var resourceFixtures = []resourceDef{
 			{"migrate-db-29341-8kdlp", "0/1", "Completed", "0", "0m", "0Mi", "ip-10-0-1-14", "51m"},
 			{"notify-consumer-84fbb9c7c-5wnjd", "1/1", "Running", "1", "88m", "241Mi", "ip-10-0-3-51", "9d"},
 			{"payment-api-9d7c8f6b5-t4z8v", "2/2", "Running", "0", "204m", "722Mi", "ip-10-0-2-88", "2d"},
-			{"payment-api-9d7c8f6b5-wr3nc", "1/2", "Pending", "0", "-", "-", "<none>", "4m"},
+			{"payment-api-9d7c8f6b5-wr3nc", "1/2", "Pending", "0", "pending", "pending", "<none>", "4m"},
 			{"search-indexer-7c9b4d8f6-jx0pm", "1/1", "Running", "0", "310m", "1.2Gi", "ip-10-0-2-88", "21d"},
 			{"web-frontend-6b8c7d9f5-c8trq", "1/1", "Running", "0", "76m", "180Mi", "ip-10-0-1-14", "1d"},
 			{"web-frontend-6b8c7d9f5-nb4kd", "1/1", "Running", "0", "71m", "176Mi", "ip-10-0-3-51", "1d"},
@@ -249,7 +256,9 @@ var resourceFixtures = []resourceDef{
 			Cols: []string{"NAME", "REQUEST", "LIMIT", "AGE"}, Allowed: basicActions},
 		Rows: [][]string{
 			{"compute-quota", "cpu: 4200m/16, memory: 12Gi/32Gi", "cpu: 8/32, memory: 24Gi/64Gi", "180d"},
-			{"object-quota", "-", "-", "180d"},
+			// An object-count quota has no compute request or limit — not
+			// applicable, as opposed to not yet known.
+			{"object-quota", "n/a", "n/a", "180d"},
 		},
 		Extra: []nsRow{
 			{"staging", []string{"compute-quota", "cpu: 900m/8, memory: 3Gi/16Gi", "cpu: 2/16, memory: 6Gi/32Gi", "77d"}},
@@ -417,7 +426,7 @@ var resourceFixtures = []resourceDef{
 			{"cert-manager", []string{"web-tls", "Certificate", "44d"}},
 			{"cert-manager", []string{"api-tls", "Certificate", "12d"}},
 			{"monitoring", []string{"k8s-prometheus", "Prometheus", "128d"}},
-			{"-", []string{"letsencrypt-prod", "ClusterIssuer", "180d"}},
+			{"<cluster>", []string{"letsencrypt-prod", "ClusterIssuer", "180d"}},
 		},
 	},
 }
@@ -454,8 +463,38 @@ func cloneResourceFixtures() []resourceDef {
 		for j, extra := range fixture.Extra {
 			out[i].Extra[j] = nsRow{NS: extra.NS, Row: append([]string(nil), extra.Row...)}
 		}
+		fillPodOwners(&out[i])
 	}
 	return out
+}
+
+// fillPodOwners appends each pod row's OWNER meta cell (T42).
+//
+// The live backend reads ownerReferences off the pod. The demo has no API
+// objects, so it recovers the ReplicaSet name from the pod name the same way
+// Kubernetes builds it — `<rs>-<suffix>` — which is exactly the shape the
+// fixtures already use. A pod with no generated suffix (cache-redis-0,
+// prometheus-server-0) owns itself, which is what a StatefulSet member looks
+// like to a grouping that only knows names.
+func fillPodOwners(r *resourceDef) {
+	if r.Kind.Key != "pods" || len(r.Kind.Meta) == 0 {
+		return
+	}
+	owner := func(row []string) string {
+		if len(row) == 0 {
+			return ""
+		}
+		if i := strings.LastIndexByte(row[0], '-'); i > 0 {
+			return row[0][:i]
+		}
+		return row[0]
+	}
+	for i, row := range r.Rows {
+		r.Rows[i] = append(row, owner(row))
+	}
+	for i, extra := range r.Extra {
+		r.Extra[i].Row = append(extra.Row, owner(extra.Row))
+	}
 }
 
 // visible returns the columns and rows for r as seen under namespace ns.

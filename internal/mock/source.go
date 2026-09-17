@@ -57,6 +57,7 @@ func (s *Source) Kinds() []domain.Kind {
 		out[i] = r.Kind
 		out[i].Cols = append([]string(nil), r.Cols...)
 		out[i].Allowed = append([]string(nil), r.Allowed...)
+		out[i].Meta = append([]string(nil), r.Kind.Meta...)
 	}
 	return out
 }

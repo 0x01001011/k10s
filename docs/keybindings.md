@@ -17,6 +17,11 @@
 | `/`                    | commands — namespace, context, theme, settings                                                                                |
 | `:`                    | narrowing — search, filter, scale                                                                                             |
 | `f`                    | find: focus the main table's row-search box                                                                                   |
+| `<` / `>`              | move the sort column left / right; past either end returns to the backend's own order                                         |
+| `S`                    | flip the sort direction (no-op when nothing is sorted)                                                                        |
+| `space` (main table)   | fold / unfold the row group under the cursor; stays a search character while searching                                        |
+| `t` (main table)       | open / close the owner tree — Deployment → ReplicaSet → Pod, each node selectable and actionable as its own kind               |
+| click a column header  | cycle that column: ascending → descending → default                                                                           |
 | `ctrl+a`               | toggle AI prompt mode (also focuses prompt)                                                                                   |
 
 ## Movement

@@ -499,6 +499,17 @@ func (s *Store) podMetric(ns, name string) (metricSample, bool) {
 	return m, ok
 }
 
+// podMetricsKnown reports whether the metrics API has answered at all.
+//
+// It is the difference between "this pod has no reading yet" and "there is
+// nothing to read from": both printed the same dash, so a cluster with no
+// metrics-server was indistinguishable from a pod using no CPU.
+func (s *Store) podMetricsKnown() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.podMetrics) > 0
+}
+
 func (s *Store) nodeMetric(name string) (metricSample, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

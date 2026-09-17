@@ -114,7 +114,7 @@ Card chỉ xong khi **tất cả** đúng:
 
 ### P1 — daily driver
 
-- [ ] **T07** sort theo cột
+- [x] **T07** sort theo cột
 - [ ] **T08** multi-select + bulk action
 - [ ] **T09** log: grep / previous / timestamps / save
 - [ ] **T10** port-forward manager
@@ -156,6 +156,23 @@ T27→T30 là cơ chế; T31→T35 là data; T36 là thứ chưa TUI nào có.
 - [ ] **T34** lens: kargo
 - [ ] **T35** lens: traefik (spec-only + router inspector opt-in)
 - [ ] **T36** edges — điều hướng quan hệ (pod → cnpg Cluster → PVC → longhorn Volume)
+
+### P5 — main-view redesign
+
+Spec: [../SPEC.md](../SPEC.md). Build in numbered order. T37 and T38 come
+first because they are the measurement: without them, no later card can show
+it did not slow the frame down.
+
+- [x] **T37** frame memo — one `Rows()` per frame
+- [x] **T38** fix the perf guards so they measure navigation
+- [x] **T39** layout budget — header and side panes by terminal width
+- [x] **T40** column policy — weight, priority, measured in cells
+- [x] **T41** honest columns — retire the ambiguous `-`
+- [x] **T42** row groups — group by owner, on by default for Pods
+- [x] **T43** view engine — **not extracted** (see the card); the two fixes it carried are done
+- [x] **T44** metric history + bar + sparkline + braille chart panel (`:chart`)
+- [x] **T45** action search in the palette + typed gate on Delete/Drain
+- [x] **T46** nested owner tree in the main table (opt-in, `t` — `T` is the theme cycler)
 
 ### Lanes
 
@@ -1411,6 +1428,616 @@ Resolve edge **lazy**, chỉ khi user mở panel quan hệ. Chặn độ sâu re
 **Accept** — [ ] mỗi `via` một test · [ ] chuỗi pod→cluster→pvc→volume đi được
 cả hai chiều · [ ] edge trỏ tới kind chưa load → hiện "chưa load", không tự mở
 watch · [ ] cycle không treo UI.
+
+---
+
+# P5
+
+Full spec: [../SPEC.md](../SPEC.md). The cards below are the dispatch-sized
+version; where a card is silent, SPEC.md is the source of truth.
+
+---
+
+## T37 — frame memo: one `Rows()` per frame
+
+**Effort** S · **Deps** none · **Lane** B · **Done**
+
+**Goal** — `View()` calls `src.Rows()` exactly once.
+
+**Why** — `tableData()` (`internal/ui/model.go:730`) has no memo. In table
+mode one frame calls it **4–6 times**: `view.go:695`, `view.go:750`,
+`view.go:976` (twice, via `curName()` → `curRow()` → `tableData()`,
+`model.go:833`/`:841`), and `view.go:1023` twice more via `rowStatus`.
+`BenchmarkRowsPods` is 488µs / 8018 allocs for 2000 pods
+(`performance.md:52`). Every later P5 card adds work to this frame; without
+this one first, none of them can show they did not slow it down.
+
+**Files** — `internal/ui/model.go`, `internal/ui/view.go`,
+`internal/ui/palette.go`
+
+**Design**
+
+- `rowsMemo` keyed on `(kind, namespace, search)`, cleared at the top of
+  **both** `Update` and `View` — the pattern `kindsMemo` already uses, written
+  down at `performance.md:125-130` ("never staler than one frame").
+- `paletteHits()` has the same problem: once per frame at
+  `palette_view.go:20`, and **twice per click** (`model.go:2747`, `:2750`).
+- Do not change `tableData()`'s signature; add the cache behind it.
+
+**Accept**
+
+- [x] One `View()` → exactly one `Rows()`.
+- [x] One palette click → exactly one `paletteHits()`.
+- [x] `BenchmarkView` allocs/op does not rise.
+- [x] `just shot 160 48` byte-identical to the frame before the change.
+
+**Tests** — `TestViewBuildsRowsOnce`, counting through a source stub the way
+`model_test.go:87` already does.
+
+**Shipped note** — `RowCount` had to join the memo key. A caller can mutate
+the cluster and re-read with no message in between, and a memo keyed only on
+kind/namespace/search hands back the row it just deleted.
+
+---
+
+## T38 — perf guards that measure navigation
+
+**Effort** S · **Deps** none · **Lane** B · **Done**
+
+**Goal** — `TestKeypressLatency` measures the table, not the prompt.
+
+**Why** — `model_test.go:97-121` drives `key("j")` and `key("k")`. In
+`focusMain`, `j` is unbound and `k` calls `openPrompt("k")`
+(`model.go:1666`). From the second iteration **every keystroke lands in the
+text field**, so the frame being measured is a zoomed prompt with a ~400-char
+buffer. `BenchmarkKeypressFrame` (`bench_test.go:36-47`) has the identical
+defect. The guard does not guard what it claims to.
+
+**Files** — `internal/ui/model_test.go`, `internal/ui/bench_test.go`
+
+**Design**
+
+- Drive `key("down")` / `key("up")`, which reach `m.move()`
+  (`model.go:1660`).
+- Tighten `model_test.go:87` from `gotRows >= nKinds` (30, roughly 7× the
+  real number of 4) to `gotRows > 1`. After T37 the true answer is 1.
+- Assert focus is still `focusMain` after the drive loop.
+
+**Accept**
+
+- [x] Red when T37 is reverted, green with it.
+- [x] The latency test asserts focus did not move.
+- [x] `just test-perf` green.
+
+---
+
+## T39 — layout budget by terminal width
+
+**Effort** M · **Deps** none · **Lane** B · **Done**
+
+**Goal** — 80×24 is usable: nothing clipped mid-token, no buttons lost.
+
+**Why** — `headerH: 4` is hardcoded (`model.go:919`), and row 2 is blank while
+row 4 is a rule (`view.go:188-192`). With a 3-row prompt and a 1-row status
+bar that is **8 of 24 rows (33%)** of chrome before a single pod is drawn.
+`leftW`/`rightW` are constants (`model.go:929-931`) that only collapse on `z`,
+so the side panes take **38 of 80 columns (47%)**. Neither header line has a
+width budget: the 80-column frame ends at `│  nodes`, and the `ns ▾` /
+`theme ⟳` buttons sit off screen **with their zones still marked** — the mouse
+affordance dies silently. Row 3 ends `42%    81`, cut inside the number.
+
+**Files** — `internal/ui/model.go` (`layout()`), `internal/ui/view.go`
+(`viewHeader`), `docs/ui.md`
+
+**Design**
+
+| Width | Header | Left | Right |
+|---|---|---|---|
+| ≥ 120 | 4 rows, gauge 16, absolute figures shown | 22 | 24 |
+| 96–119 | 2 rows (no blank, no rule), gauge 10, figures hidden | 18 | 20 |
+| < 96 | 1 row, gauge 6 | 18 | 0 |
+
+- `headerH` becomes a function of `m.w`. It is already read through `l`
+  everywhere (`view.go:193`, `palette_view.go:93`), so the change is
+  contained.
+- Each header segment is assembled against the remaining budget and **dropped
+  whole, never cut**. A zone is marked only if its segment was drawn.
+- Below 96, the Actions pane goes first and the sidebar stays: its keys are
+  also on the status bar and in the palette, whereas the sidebar is the only
+  thing saying where you are. `z` still collapses both.
+
+**Accept**
+
+- [x] `just shot 80 24` — no token cut mid-word; MEM shows in full or not at
+      all.
+- [x] `just shot 80 24` — the pod table gets ≥ 15 data rows.
+- [x] No zone is scannable whose segment was not drawn.
+- [x] `just shot 160 48` unchanged.
+
+**Tests** — `TestHeaderNeverClipsMidToken` at 80/96/120,
+`TestHeaderZoneIsMarkedOnlyWhenDrawn`, `TestHeaderFitsItsWidth`.
+
+**Shipped note** — the accept bar originally said ≥ 18 data rows, which is
+arithmetically impossible with a 3-row prompt and a 1-row status bar; the real
+ceiling is 17 and the bar is now 15. Two further corrections during the work:
+the demo tag is its own segment with a short form, because folded into the
+context segment it outranked everything and then took the context name down
+with it; and separators shrink to `" · "` below 120 columns, which buys back
+the node counter.
+
+---
+
+## T40 — column policy: weight, priority, measured in cells
+
+**Effort** M · **Deps** T37 · **Lane** B · **Done**
+
+**Goal** — NAME is not truncated while a less important column is still on
+screen.
+
+**Why** — three defects, all in `fitCols`/`tryFit` (`view.go:373-436`):
+
+1. The shrink loop takes from the **widest** column over its minimum
+   (`view.go:422-428`), which is always NAME. Measured: at 100 columns NAME is
+   already `api-gateway-7d9f4…` *while four columns are still displayed*, so
+   two pods differing only in their hash suffix render identically.
+2. `keep = keep[:len(keep)-1]` (`view.go:383`) drops right to left, with no
+   notion of importance. Measured: AGE dies first at every width.
+3. `tryFit` measures with `len(r[ci])` — **bytes** (`view.go:395`, `:401`) —
+   while cells are padded and cut by display width (`view.go:886`). A
+   non-ASCII value (an Event message, an i18n namespace) over-reserves and
+   pushes real columns off the right-hand edge.
+
+**Files** — `internal/ui/view.go`, `internal/ui/columns.go` (new)
+
+**Design**
+
+- One lookup keyed on the header name, beside the three that already exist
+  (`view.go:410`, `view.go:767`, `trend.go:64`): a `weight` and a `priority`
+  per header.
+- Shrink: take from the largest `natural[i] / weight[i]`. NAME weight 3;
+  STATUS, READY weight 2; everything else 1.
+- Drop: take the lowest `priority`, not the rightmost column. Identity 100
+  (never dropped); STATUS 90; AGE 80; READY 70; the rest 50.
+- Measure with `lipgloss.Width`, not `len`.
+- **Do not** turn `Cols []string` into a struct. That touches 30 literals in
+  `internal/k8s/kinds.go`, every positional row builder, `applyNamespace`
+  (`rows.go:62`) and all of `internal/mock` — a shared file, see the hard
+  limits.
+- **Do not** build drag-to-resize. The target is the 2-cell `gap`
+  (`view.go:749`) and it collides with the drag-to-select workflow `ctrl+s`
+  exists to enable (`keybindings.md:31-36`). Weighted shrink is ~6 lines, no
+  state, no gesture, and fixes what people actually complain about.
+
+**Accept**
+
+- [x] At 100 columns NAME has no `…` while a lower-priority column is shown.
+- [x] At 80 columns STATUS shows in full, not `x Crash…`.
+- [x] AGE survives to 80 columns.
+- [x] A CJK cell does not push other columns off screen.
+- [x] `just shot` at 80/100/140/160: no line exceeds the width.
+
+**Tests** — `TestNameSurvivesUntilColumnsAreExhausted` (table over
+80/100/140/160), `TestWidthIsMeasuredInCellsNotBytes`,
+`TestLowestPriorityColumnDropsFirst`, `TestColumnNeverNarrowerThanItsHeader`.
+
+**Shipped note** — weight and priority alone changed nothing, because NAME's
+flat minimum of 18 let `tryFit` *succeed* by crushing it, so the drop loop
+never ran. The identity column now asks for its natural width capped at 30,
+which makes the fit fail and drops a column nobody was reading. A column is
+also never cut below its own header: `RESTAR…` names nothing, so a column that
+cannot afford its header leaves instead.
+
+---
+
+## T41 — honest columns: retire the ambiguous `-`
+
+**Effort** M · **Deps** none · **Lane** A · **Done**
+
+**Goal** — an empty cell says why it is empty.
+
+**Why** — `-` currently means **five** things: unknown, unset, defaulted, not
+applicable, and pending. All five render `subtle` (`view.go:452`), so they
+read as a settled value. This is the repo's own "honest columns" principle
+being broken by its own tables.
+
+**Files** — `internal/k8s/rows.go`, `internal/ui/view.go` (`cellLevel`),
+`internal/mock/data.go`, `docs/ui.md`
+
+**Design**
+
+A four-word vocabulary: `<none>` (deliberately absent), `<cluster>`
+(cluster-scoped), `n/a` (not applicable to this object), `pending` (expected,
+not yet — graded `warn` so `cellLevel` glyphs it), plus a real value wherever
+one is known. Retire `-` entirely.
+
+| Column | Where | Today | Should be |
+|---|---|---|---|
+| CPU/MEM (pods) | `rows.go:355` | `-` with no metrics-server | `n/a` when the API never answered, `pending` when it has but this pod has no reading |
+| MIN (hpa) | `rows.go:900` | `-` where the Kubernetes default is 1 | `1` |
+| IMAGE (deploy) | `rows.go:409` | first container only, header unqualified | `<image> +2` |
+| ADDRESS (ingress) | `rows.go:562` | `-` for both "just created" and "3-day outage" | `pending` |
+| CAPACITY (pvc/pv) | `rows.go:598`, `:1233` | `-` means unbound (PVC) or a spec bug (PV) | distinguish; unbound reads `Status.Phase` |
+| DURATION (job) | `rows.go:474` | `-` for a job that has not started | `pending` |
+| NAMESPACE (cluster-scoped CR) | `rows.go:830` | `-` | `<cluster>` |
+
+**Accept**
+
+- [x] No bare `-` survives in any demo table.
+- [x] With no metrics-server, CPU/MEM say `n/a` rather than a column of
+      dashes.
+- [x] `pending` is graded and carries a glyph, not colour alone.
+- [x] `just shot` in both states.
+
+**Tests** — `TestSentinelVocabularyIsGraded`,
+`TestPendingCellsAreGlyphedInTheTable`, `TestNoBareDashesInTheDemoTables`.
+
+**Shipped note** — two corrections. READY on a pod with init containers was
+listed here as disagreeing with STATUS; it does not — counting only
+`Spec.Containers` is what `kubectl` does, and changing it would diverge from
+the tool operators check against. And metric columns spend their two reserved
+cells on the trend arrow, so a graded sentinel there would have been the one
+cell in the table carrying severity in colour alone; a graded value now takes
+the glyph in those same cells.
+
+---
+
+## T42 — row groups: group by owner, on by default for Pods
+
+**Effort** L · **Deps** T37, T40, **B:T07** · **Lane** B · **Done**
+
+**Goal** — opening Pods shows each pod under its owner, with sort, filter, row
+numbering and selection behaving exactly as they did.
+
+**Why** — see [../SPEC.md](../SPEC.md) §3 M6. In short: a real tree in the
+main table breaks five things that work today (sort becomes undefined, filter
+forks into two wrong answers, row numbers stop being addressable, a 500-pod
+namespace gets worse, selection doubles in arity). **One level** of grouping
+gives the same read and loses none of them. The multi-hop tree stays in the
+`X` panel (`tree.go:62`) — that is card **T14**, and this one does not
+duplicate it.
+
+**Files** — `internal/ui/rowgroups.go` (new), `internal/ui/view.go`,
+`internal/ui/model.go`, `internal/k8s/rows.go` (OWNER cell),
+`internal/config/config.go`, `docs/ui.md`, `docs/config.md`
+
+**Design**
+
+- **The owner needs no new watch.** `metadata.ownerReferences` is **already on
+  the pod**. Group by `ownerReferences[0].name`: no extra request, no extra
+  informer (`performance.md:31`, `TestOpeningOneKindWatchesOnlyThatKind` stays
+  green).
+- The Deployment name is **derived**, not fetched: the ReplicaSet
+  `web-frontend-6b8c7d9f5` matches a pod-template-hash suffix and yields
+  `web-frontend`, drawn as `web-frontend · rs 6b8c7d9f5`. When the shape does
+  not match, print the owner name as-is. **Never print a Deployment name that
+  was not derived from a matched pattern.**
+- The owner rides as a meta cell past `len(Cols)`, not as a column: grouping
+  must read a value already in the row, but a visible OWNER column would put a
+  cell nobody asked for on every pod table.
+- Group keys: `owner` (default for Pods), `node`, `namespace` (only under
+  `:ns all`), `status`, `object` (default for Events), `none`. No nesting.
+  `label:<k>` is **absent** — labels are not in the row set, and a key that
+  returns one group called `<none>` for everything is worse than no key.
+- Behaviour mirrors the sidebar, whose rules are already tested
+  (`groups_test.go`) and written down at `ui.md:83-85`:
+  - `map[groupKey]map[value]bool`, **all open** by default, **not persisted** —
+    a folded row group saves no requests (unlike the sidebar), so reopening a
+    session with half the pods hidden is a surprise.
+  - `space` folds the group under the cursor, and stays a search character
+    while searching (`model.go:1481`). No `left` binding — `←` focuses the
+    sidebar.
+  - **A search ignores folding entirely.** Verbatim `model.go:697-699`. A
+    group with no matches disappears rather than showing an empty header.
+  - **Sort and grouping are exclusive.** Sorting any column drops to flat and
+    the panel title says so. This is what keeps T07 honest, and it is one
+    branch instead of five.
+  - Headers are unnumbered. Object rows keep **one continuous 1..N sequence
+    across the table**, taken from the index in the ungrouped slice rather
+    than the render index, so folding does not renumber the rows below. This
+    is the only place `view.go:870` really changes.
+  - Headers are not selectable; `↑`/`↓` skip them. Folding the group holding
+    the selection moves it to that group's first row and marks the header
+    (`groups_test.go:217`). `curRow()`, `curName()` and the Actions pane are
+    **untouched**.
+- Falls back to flat, silently, when: the kind has no such column; fewer than
+  2 distinct values; more than 40 groups; more than 2000 rows.
+- Cost: one O(N) pass over rows already in hand, one string compare per row,
+  one `[]groupSpan`. Memoised beside `kindsMemo`, cleared at the top of
+  `Update` and `View`. Collapse state is **not** in the memo — it is read at
+  render time, so folding is a pure repaint.
+- Config: `group: "pods=owner,events=object"` — one flat line, the shape
+  `config.md:26` uses. Change **both** `render()` and `parse()`.
+
+**Accept**
+
+- [x] Opening Pods shows pods under owner headers, proven by `just shot 160 48`.
+- [x] Sorting any column drops to flat, and the title says so.
+- [x] Folding a group does **not** renumber the rows below it.
+- [x] `f` plus a term still shows matches inside a folded group.
+- [x] `↓` walks the whole table and `curRow()` never returns a header.
+- [x] A 2000-pod namespace falls back to flat.
+- [x] `TestOpeningOneKindWatchesOnlyThatKind` still green.
+- [x] Empty `group` renders the frame this card replaced.
+
+**Tests** — `TestGroupNoneRendersAFlatTable` (the regression gate for all of
+P5); mirrors of the four sidebar rules (`groups_test.go:125`, `:217`, `:176`,
+`:236`); `TestRowNumbersAreContinuousAcrossGroups`;
+`TestCollapsingAGroupDoesNotRenumberRowsBelowIt`; `TestSortingDropsToFlat`;
+`TestGroupingBuildsNoExtraRows`;
+`TestPodsGroupByOwnerByDefault` (which also asserts no ReplicaSet is invented
+for a name with no template hash).
+
+**Shipped note** — `groupColumn` has to read the columns the backend actually
+returned, not `Kind.Cols`. Under `:ns all` the prepended NAMESPACE column both
+adds a key to group by and shifts every meta cell one to the right.
+
+---
+
+## T43 — view engine — CLOSED, NOT EXTRACTED
+
+**Decided after building T42, T44 and T46.** This card was sequenced last so
+the call could be made on evidence, and the evidence says: do not extract.
+
+The card's argument was "adding a view should be a function and a case, not
+another branch in `tableBody`". Two real views have landed since it was
+written — the owner tree (T46) and the chart panel (T44) — and **neither
+touched `tableBody`**: the tree has its own `treeBody` plus one branch in
+`viewMain`, and the chart appends to the body. `viewMain` is already a flat
+dispatch of early returns, each about eight lines.
+
+Extracting now is churn and regression risk in exchange for nothing a user can
+see. Reopen this card when a third view genuinely does not fit — not before.
+
+The two fixes it carried are real and are **done**:
+
+- [x] The table shows `n/m` on its title. The text view has had a position
+      indicator since it was written (`38/66  57%`); the table never did, so
+      scrolling a long namespace gave no sense of depth.
+- [x] `←` / `h` — documented as "focus resource list" since the first release
+      and **bound nowhere**; `h` fell through the Actions loop, then plugins,
+      and did nothing. Both bound now. `l` is **not** bound (it is Logs) — the
+      pair reads as symmetrical and is not, which is why the docs spell it
+      `←` `h` / `→`.
+
+---
+
+## T43 (original) — view engine
+
+Kept for the record; superseded by the decision above.
+
+**Effort** M · **Deps** T39, T42 · **Lane** E
+
+**Goal** — adding a view is a function and a case, not another branch in
+`tableBody`.
+
+**Why** — the centre pane is one hardcoded table. Four views are queued
+(grouped, chart, port-forward manager, pulse) and each would grow another
+branch inside a 1419-line `view.go` and a 2946-line `model.go`. Extract
+**after** T42 proves a second mode exists, not before.
+
+**Files** — `internal/ui/viewmode.go` (new), `internal/ui/view.go`
+
+**Design**
+
+```
+rows   [][]string      // unchanged: flat, globally ordered
+meta   []rowMeta       // parallel: groupValue, hidden, ordinal
+spans  []groupSpan     // value, firstRowIdx, count
+```
+
+Modes: `table`, `grouped`, `text` (describe/YAML/help/tree), `chart`. Each is
+a function from that contract plus a `layout` to a `Block`. `zoom`, the scroll
+model and the zone namespaces are shared.
+
+**Accept**
+
+- [ ] `tableBody` knows nothing about grouping.
+- [ ] Every `just shot` frame byte-identical to before the extraction.
+
+---
+
+## T44 — metric history + bar / sparkline / chart
+
+**Effort** L · **Deps** T37 · **Lane** E · **Done**
+
+**Goal** — see the shape of a number, not only its current value.
+
+**Why, and the full design** — [../SPEC.md](../SPEC.md) §3 M8. Read it before
+writing a line: it fixes every glyph, every colour token, the ASCII fallback,
+and the reason for **not** adding a dependency.
+
+**Files** — `internal/ui/gauge.go`, `chart.go`, `history.go` (all new),
+`internal/ui/view.go`, `internal/ui/model.go`
+
+**Design — the parts that must not drift**
+
+- **Build it, ~135 lines.** `bubbles/progress` (already in go.mod) renders a
+  gradient through a `lipgloss.Style` per segment — exactly the cost `paint`
+  (`block.go:35`) exists to avoid, measured at 43% of the frame
+  (`performance.md:106-120`). `ntcharts` brings its own canvas, viewport and
+  zone handling, a second rendering model beside `block.go` and `zones.go` —
+  and `zones.go:12-19` exists **because** bubblezone was removed on
+  measurement.
+- **Twelve colour tokens is a hard ceiling.** `theme.Theme` has exactly twelve
+  (`theme/theme.go:16-30`) and custom themes are `UnmarshalStrict` with every
+  field required (`theme.go:126-137`) — adding a token **breaks every existing
+  user theme file**.
+- **Bar** (`view.go:68-84` → `gauge.go`): block-eighths on a dotted trough.
+  Fixes a real bug on the way: `filled := pct * width / 100` truncates with no
+  floor (`view.go:76`), so at width 16 **every pct from 1 to 6 draws zero
+  cells** — a node at 6% is identical to one at 0%. A negative `pct` is
+  unguarded and panics in `strings.Repeat`. Hoist the hardcoded 60/85
+  (`view.go:69-75`) to named constants; several call sites want them.
+- **Sparkline** `▁▂▃▄▅▆▇█`, oldest to newest, scaled to **that row's own**
+  maximum. Behind a toggle, off by default — the CPU column has no eight
+  spare cells at 80 columns.
+- **Chart**, braille (`U+2800` + bitmask), for one selected object. Below
+  24×3 it does not draw: the bar and the number already say the current value.
+- **History must not be fed from `View`.** `arrowFor` does exactly that today
+  (`view.go:806-823`) and **must not be copied**: `View` runs per keystroke
+  rather than per tick, and walks only visible rows (`view.go:850`), so the
+  ring would both duplicate and hole. Feed it from the repaint tick in
+  `Update`.
+- Ring `[N]int32`, not `uint16`: a 64-core pod is 64000 milli, and MiB
+  overflows 16 bits at 64 GiB.
+- Sweep on the same tick: drop keys no longer in the row set — which also
+  fixes the unbounded `m.trends` map (`trend.go:97-108`).
+- **ASCII fallback** resolved **once at startup** from `K10S_ASCII=1`, a
+  `$LANG` without `UTF-8`, or config. Never per call.
+
+**Accept**
+
+- [x] A node at 1% and a node at 0% draw differently.
+- [x] 99% and 100% draw differently.
+- [x] A negative `pct` or a zero `width` does not panic.
+- [x] Two different grades never produce the same rune sequence.
+- [x] Rendering 20 frames with no tick leaves the sample count unchanged.
+- [x] `just shot 80 24` with `K10S_ASCII=1` is readable.
+- [x] `BenchmarkView` allocs/op does not rise.
+
+**Tests** — `TestGaugeShowsAnyUsageAtAll` (the 1–6% case, **wrong before this
+card**); `TestGaugeDoesNotRoundUpToFull`; `TestGaugeWidthIsExact` for every
+pct 0..100 at widths {6,10,16} in both glyph sets;
+`TestGlyphSetsAreSingleWidth`; `TestHistoryIsNotFedByView`;
+`TestHistorySweepDropsVanishedRows`; `TestChartPlotsTheShape`.
+
+**Shipped note** — two departures from the plan above. The window is one store
+of 64 samples, not 16 for the sparkline plus 120 for the chart: the sparkline
+draws the tail of the same window, so there is no second sampling path to keep
+in step. And the chart plots CPU alone rather than CPU and MEM together — a
+second series needs a second stroke style to stay readable without colour, and
+one series answered the question. The state strip (`▪ ▫ ▮ ▯`) was not built;
+nothing asked for it yet.
+
+---
+
+## T45 — action search + typed gate
+
+**Effort** M · **Deps** T37 · **Lane** D · **Done**
+
+**Goal** — typing the name of a thing reaches that thing; and the two keys
+that cannot be undone are not one `enter` away.
+
+**Why** — the palette (`palette.go:54-92`) finds kinds and objects but **not
+verbs**. `R`, `X` and `ctrl+y` appear in no pane and no hint string
+(`view.go:1172`). And `D` delete sets `danger: true` but gates only on `enter`
+(`model.go:2181`) — `enter` is also the universal "open" key, so `D`,`enter`
+deletes. `u` drain (`model.go:2229`) is the same, and drain is the heaviest
+key in the app. The typed gate **already exists** and lens packs already use
+it (`lens.go:139-140`).
+
+**Files** — `internal/ui/palette.go`, `internal/ui/model.go`
+
+**Design**
+
+- `paletteHits` also matches `Actions`, lens specs and plugins; the `sub` line
+  names the kinds it applies to; firing goes through `fireAction`. Reuses the
+  palette's overlay, key handling, zones and mouse path — no new modal, no new
+  focus state.
+- `typed: name` on `D` (`model.go:2183`) and `u` (`model.go:2232`).
+- `e` → apply (`model.go:1189-1210`) applies **unconditionally** when the
+  editor exits: `:q` out of `vi`, a file truncated by a crashed editor, an
+  empty file — all reach `src.Apply`. Compare against the fetched bytes; skip
+  silently when identical.
+- `o` cordon stays ungated — it is a toggle and the label flips.
+- Preserve the invariant: `confirm.armed()` gates identically on the keyboard
+  (`model.go:1318`) and on the mouse OK button (`model.go:2729`).
+
+**Accept**
+
+- [x] Typing "describe" in the palette reaches Describe.
+- [x] `R`, `X` and `ctrl+y` are findable by name.
+- [x] `D`, `enter` does **not** delete.
+- [x] `e` then `:q` writes nothing to the cluster.
+- [x] The mouse OK button and `enter` gate identically.
+
+**Tests** — `TestDeleteRequiresTypedName`; `TestDrainRequiresTypedName`;
+`TestEditWithNoChangesDoesNotApply`; `TestEditWithAnEmptyFileDoesNotApply`;
+`TestEditWithChangesStillApplies`; `TestPaletteFindsActionsByName`.
+
+**Shipped note** — `r` restart was listed here for a `danger` flag when
+replicas < 2 and was not done: the replica count is not on the action path
+without another read, and the rollout is reversible. `handleMouse` was also
+calling `paletteHits()` twice per click on top of the once-per-frame the
+overlay costs; asked once now.
+
+---
+
+## T46 — nested owner tree in the main table
+
+**Effort** L · **Deps** T42 · **Lane** B · **Done**
+
+**Goal** — `t` opens a multi-level tree in the main table: Deployment →
+ReplicaSet → Pod, indented, every node selectable.
+
+**Why** — T42 deliberately groups **one level** so it does not break sort,
+filter, row numbering or selection ([../SPEC.md](../SPEC.md) §3 M6 lists all
+five). This card does the thing T42 refused, but **opt-in and afterwards**,
+once T42 has been seen on a real frame and a tree is still wanted. That order
+is the point of the card: doing it first would build the expensive version
+before knowing whether the cheap one was enough.
+
+**Files** — `internal/ui/treeview.go` (new), `internal/ui/model.go`,
+`internal/ui/view.go`, `docs/ui.md`, `docs/keybindings.md`
+
+**Design**
+
+The five things T42 avoids, each of which this card has to answer — and if it
+cannot, stop and say so rather than guess:
+
+1. **Sort.** A tree orders siblings, so a global sort means nothing inside
+   one. Sorting **closes the tree**, the same rule T42 uses for grouping:
+   sort and structure are exclusive.
+2. **Filter.** Show matches **with their ancestors**, and draw the
+   structure-only ancestors `subtle` and unselectable. A row that is on screen
+   without matching has to be obviously not a result, or the filter looks
+   broken.
+3. **Row numbers.** In tree mode, **drop the number column** and use the
+   branch drawing (`├─`, `└─`, `│`). A number exists to address a row; in a
+   tree it addresses nothing stable, so keeping it is a lie. `rowNumBase`
+   (`view.go:1377`) is untouched — table mode is unchanged.
+4. **Scale.** A hard ceiling, as `treeMaxNodes` (`tree.go:43`) already does
+   for the `X` panel: past **300 nodes**, do **not** open, and say the number
+   in a toast. A tree that silently truncates is indistinguishable from a
+   cluster that really is that small.
+5. **Selection.** Parent nodes are real objects, selectable, with the Actions
+   pane following the selected node's kind — unlike T42, where a header is not
+   an object. This is the expensive part: `curRow()` (`model.go:820`) returns
+   the row of **one** kind, and a tree mixes kinds in one list.
+
+**The watch this needs is the hardest constraint.** `pod.ownerReferences`
+gives the ReplicaSet name for free (T42 uses exactly that), but **ReplicaSet →
+Deployment needs the ReplicaSet object**, which means a ReplicaSet informer.
+Opening Pods deliberately starts no other informer (`performance.md:31`,
+`TestOpeningOneKindWatchesOnlyThatKind`).
+
+The rule: opening the tree is an **on-demand** user action, so it may start
+the missing informers — but **only on the keypress**, never on opening the
+kind, and the toast must say which watches it started.
+
+**Accept**
+
+- [x] `t` on Pods gives Deployment → ReplicaSet → Pod at the right depths.
+- [x] Filtering shows ancestors `subtle` and unselectable.
+- [x] Tree mode has no number column and draws `├─ └─ │`.
+- [x] Over 300 nodes does not open, and the toast says the number.
+- [x] Selecting a Deployment node shows Deployment actions.
+- [x] Opening Pods **without** `t` keeps
+      `TestOpeningOneKindWatchesOnlyThatKind` green.
+- [x] `TestKeypressLatency` stays green.
+- [x] `just shot 140 34 t`.
+
+**Tests** — `TestTreeNestsPodsUnderReplicaSetsUnderDeployments`;
+`TestTreeActionsFollowTheSelectedNodesKind`;
+`TestTreeDoesNotRepointTheUnderlyingTable`;
+`TestTreeFilterKeepsAncestorsUnselectable`; `TestTreeCursorSkipsAncestors`;
+`TestTreeGlyphsCloseTheirBranches`; `TestTreeKeepsPodsWithNoDeployment`.
+
+**Shipped note** — three departures. The key is `t`, not `T`: `T` already
+cycles the theme. The kind override is a new `targetKind()`, deliberately not
+folded into `curKind()` — `tableData` keys on `curKind`, so overriding it
+would repoint the whole table at the cursor; there is a test for that. And it
+is not a mode of a view engine, because T43 was closed without building one.
 
 ---
 

@@ -25,6 +25,7 @@ clis: "kubectl,k8s,k"
 onboarded: true
 collapsed: "Config,Storage,RBAC"
 zoomed: false
+group: "pods=node"
 ai:
   provider: "anthropic"
   base_url: "https://api.anthropic.com/v1"
@@ -57,6 +58,14 @@ those defaults, which is what makes the first run after an upgrade sensible.
 layout comes back the same way on the next launch. A file without the key
 opens unzoomed.
 
+`group` is the row group-by key per kind, as `pods=owner,events=object` — see
+[ui.md](ui.md#row-groups). Only kinds that are *not* on their default appear,
+so an untouched install writes an empty string. Which groups are currently
+folded is deliberately not saved: unlike a folded sidebar group, which stops
+that kind being counted, a folded row group costs nothing, and reopening a
+session with half the pods hidden would be a surprise rather than a
+preference.
+
 ## When it saves
 
 Every mutation that should survive a restart calls `Model.saveConfig()`
@@ -74,6 +83,7 @@ immediately — there's no explicit "save" step and no dirty-flag debounce:
 | namespace picker (click `ns …` in the banner)               | `namespace`                                                                  |
 | folding a Resources group (`space`, `left`, click a header) | `collapsed`                                                                  |
 | zoom / restore the main pane (`z`, `ctrl+z`, `esc`, click `[ zoom ]`) | `zoomed`                                                           |
+| changing the row grouping (`:group <key>`)                  | `group`                                                                      |
 | `/settings` → toggle the update check                       | `update.disabled`                                                            |
 | a successful update check (startup or `/update`)            | `update.last_check`                                                          |
 

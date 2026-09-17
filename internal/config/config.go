@@ -56,7 +56,12 @@ type Config struct {
 	CollapsedSet bool     `yaml:"-"`
 	// Zoomed remembers whether the main pane was zoomed (side panes hidden)
 	// so a restart opens the way the user left it.
-	Zoomed bool   `yaml:"zoomed"`
+	Zoomed bool `yaml:"zoomed"`
+	// Group is the row group-by key per kind, as "pods=owner,events=object".
+	// One flat string because that is what this parser can hold — a real
+	// per-kind map belongs in views.yaml (T12), not here. Empty means every
+	// kind is on its default.
+	Group  string `yaml:"group"`
 	AI     AI     `yaml:"ai"`
 	Update Update `yaml:"update"`
 }
@@ -131,6 +136,7 @@ func render(c Config) string {
 	}
 	fmt.Fprintf(&b, "collapsed: %q\n", collapsed)
 	fmt.Fprintf(&b, "zoomed: %v\n", c.Zoomed)
+	fmt.Fprintf(&b, "group: %q\n", c.Group)
 	b.WriteString("ai:\n")
 	fmt.Fprintf(&b, "  provider: %q\n", c.AI.Provider)
 	fmt.Fprintf(&b, "  base_url: %q\n", c.AI.BaseURL)
@@ -195,6 +201,8 @@ func parse(s string, c *Config) {
 			}
 		case !indented && key == "zoomed":
 			c.Zoomed = val == "true"
+		case !indented && key == "group":
+			c.Group = val
 		case indented && section == "ai":
 			switch key {
 			case "provider":
