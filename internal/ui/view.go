@@ -67,23 +67,9 @@ func (m *Model) View() string {
 
 // ---- header (borderless): identity + cluster totals -----------------------
 
-func gauge(th theme.Theme, pct, width int) string {
-	col := th.Ok
-	switch {
-	case pct >= 85:
-		col = th.Err
-	case pct >= 60:
-		col = th.Warn
-	}
-	filled := pct * width / 100
-	if filled > width {
-		filled = width
-	}
-	on := paint(th.Bg, col, false, strings.Repeat("▰", filled))
-	off := paint(th.Bg, th.Border, false, strings.Repeat("▱", width-filled))
-	num := paint(th.Bg, col, false, fmt.Sprintf("%3d%%", pct))
-	return on + off + " " + num
-}
+// gauge is bar() — see gauge.go. Kept as a name because the header reads
+// better for it.
+func gauge(th theme.Theme, pct, width int) string { return bar(th, pct, width) }
 
 // hseg is one header segment: the styled string, its width without styling,
 // and how readily it is given up when the terminal is narrow.
@@ -330,7 +316,7 @@ func (m *Model) viewHeader(l layout) Block {
 		// changes second to second. The ns button competes on the same line
 		// rather than being dropped outright, because it is the only mouse
 		// affordance in the header and it also states the current namespace.
-		gaugesW := lipgloss.Width(" CPU  ") + gw + 6 + 4 + lipgloss.Width("MEM  ") + gw + 6
+		gaugesW := lipgloss.Width(" CPU  ") + barWidth(gw) + 2 + 4 + lipgloss.Width("MEM  ") + barWidth(gw) + 2
 		// On a two-part line the gap separates the groups, so rightSegs[0]
 		// carries no separator of its own; on one line it needs one.
 		oneRow := append(append([]hseg{}, leftSegs...), lead(rightSegs[0]))
@@ -1149,9 +1135,22 @@ func (m *Model) tableBody(inner, rows int) []string {
 			case ci < len(cols) && cols[ci] == nameCol && sel:
 				b.WriteString(paint(bg, col, true, cell))
 			case metricCol && !glyphed && w > 2:
-				// Value, then the arrow in the two reserved cells.
-				cell = pad(trunc(v, w-2), w-2)
+				// Value, then the arrow in the two reserved cells. With
+				// sparklines on, the shape goes between them: the newest
+				// sample sits next to the number it explains.
+				var sp string
+				if m.spark && nameIdx >= 0 && nameIdx < len(row) {
+					if s := m.rowSamples(m.curKind().Key, m.rowNamespace(row, cols), row[nameIdx]); len(s) > 1 {
+						sp = spark(th, s, cellLevel("", v))
+					}
+				}
+				spw := lipglossWidthOf(sp)
+				if spw+3 > w {
+					sp, spw = "", 0
+				}
+				cell = pad(trunc(v, w-2-spw), w-2-spw)
 				b.WriteString(paint(bg, col, false, cell))
+				b.WriteString(sp)
 				b.WriteString(paint(bg, bg, false, " "))
 				b.WriteString(trendGlyph(th, bg, arrowFor(row, ci)))
 			default:

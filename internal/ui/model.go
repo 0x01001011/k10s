@@ -286,6 +286,13 @@ type Model struct {
 	groups        map[string]groupKey
 	collapsedRows map[string]map[string]bool
 
+	// hist is the per-row metric window behind the inline sparkline, and
+	// spark is whether to draw it. Off by default: the sparkline costs eight
+	// cells in the CPU column, which at 80 columns is a column the table does
+	// not have to spare. `:set spark` turns it on.
+	hist  map[string]*ring
+	spark bool
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -1070,6 +1077,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.anim++
+		// The one place a metric sample is taken. Doing it here rather than
+		// in View is what makes the sparkline a time series: View runs per
+		// keystroke and only over visible rows, so it would append duplicates
+		// while typing, nothing while idle, and leave holes for anything
+		// scrolled past. See history.go.
+		if m.mode == modeTable && m.spark {
+			m.observeMetrics()
+		}
 		// A repaint is where a re-sorted table becomes visible, so it is
 		// also where the cursor has to be put back on its object.
 		m.reanchorRow()
@@ -2644,6 +2659,20 @@ func (m *Model) runSlash(cmd string) tea.Cmd {
 			m.toast = "row filter cleared"
 		} else {
 			m.toast = "row filter: " + arg
+		}
+		return nil
+	case ":spark":
+		m.focus = focusMain
+		m.input.Blur()
+		m.spark = !m.spark
+		if m.spark {
+			m.observeMetrics()
+			m.toast = "sparklines on — the shape fills in over the next few refreshes"
+		} else {
+			// Drop the windows rather than keep feeding something nobody is
+			// looking at.
+			m.hist = nil
+			m.toast = "sparklines off"
 		}
 		return nil
 	case ":group":
