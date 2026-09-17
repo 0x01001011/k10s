@@ -34,15 +34,21 @@ func BenchmarkView(b *testing.B) {
 
 // BenchmarkKeypressFrame measures the full interactive round trip: a
 // navigation keypress plus the frame it produces.
+//
+// It drives "down", not "j". In focusMain, j is unbound and k opens the
+// command prompt (see handleKey), so the old sequence measured an Update that
+// did nothing — and in TestKeypressLatency, one that typed into the prompt's
+// text field. Only the arrow keys reach m.move(), which is what navigating
+// the table actually costs. Numbers from before this change do not compare.
 func BenchmarkKeypressFrame(b *testing.B) {
 	m := benchModel(b)
-	m.Update(key("j"))
+	m.Update(key("down"))
 	_ = m.View()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		m.Update(key("j"))
+		m.Update(key("down"))
 		sink = m.View()
 	}
 }

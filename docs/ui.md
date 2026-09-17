@@ -15,9 +15,29 @@ TOP BANNER (no border, 4 rows incl. dashed rule)
 status bar (toast · key hints)
 ```
 
-Geometry (`layout()`): banner 4 rows, prompt 3, status 1, middle gets the
-rest. Left/right panes are 22/24 cols (18/20 under 96 cols; 0 when zoomed).
-Below 72×22 the UI is replaced by a "terminal too small" notice.
+Geometry (`layout()`): prompt 3 rows, status 1, middle gets the rest. The
+banner and the side panes are budgeted by width, because at 80×24 the fixed
+sizes spent a third of the rows and 47% of the columns on chrome:
+
+| Width | Banner | Left | Right | Gauges |
+|---|---|---|---|---|
+| ≥ 120 | 4 rows | 22 | 24 | 16 wide, with `18.4/48 cores` |
+| 96–119 | 2 rows (no blank, no rule) | 18 | 20 | 10 wide, no figures |
+| < 96 | 1 row (identity and gauges share it) | 18 | 0 | 6 wide, no figures |
+
+`z` still collapses both panes at any width. Below 72×22 the UI is replaced
+by a "terminal too small" notice.
+
+**The banner never clips mid-token.** Each part of the top line is a segment
+with a priority (`hseg` / `fitSegs` in `view.go`), and a terminal too narrow
+for all of them drops whole segments, lowest priority first — it does not cut
+the line. Dropping order, least important first: version, product name, theme
+button, namespace button, node readiness, demo tag, context name. The
+namespace outranks the theme because it is also the mouse affordance; node
+readiness outranks the namespace button because the namespace is already in
+the main panel title while nothing else reports a node down. A dropped button
+is not marked as a click target, so a mouse affordance never outlives its own
+label.
 
 Neither side pane spends rows on a permanent search box — see *Search boxes*
 below.

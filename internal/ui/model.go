@@ -260,6 +260,17 @@ type Model struct {
 	// View, so it is never staler than one frame.
 	kindsMemo []domain.Kind
 
+	// rowsMemo holds tableData()'s answer for the current frame or message.
+	// tableData is the single read path for the table, so one frame asked for
+	// it three to five times — the search box, the body, curName() twice via
+	// curRow(), and rowStatus twice more on Nodes — and every call was a full
+	// formatted row build (488µs / 8018 allocs at 2000 pods). Keyed because
+	// kind, namespace and the row search can all change inside one Update.
+	// Cleared at the top of Update and View, exactly like kindsMemo, so it is
+	// never staler than one frame — a memo that outlived the frame would show
+	// a cluster that had stopped changing.
+	rowsMemo *rowsCache
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -727,15 +738,51 @@ func (m *Model) filtered() []int {
 // (m.rowSearch). Every place that reads the table — selection bounds,
 // rendering, click targets — goes through this so they never disagree
 // about what's currently showing.
+// rowsCache is one frame's worth of tableData, with the inputs it was built
+// from so a change inside a single Update rebuilds instead of lying.
+//
+// count is part of the key, not decoration: a caller can mutate the cluster
+// and re-read without a message in between (an action that deletes, then asks
+// what is now selected), and a memo keyed only on kind/namespace/search would
+// hand back the row it just removed. RowCount is the cheap O(1) path the
+// sidebar badges already use, so paying it on a cache hit is far less than
+// the full row build it avoids.
+type rowsCache struct {
+	kind   string
+	ns     string
+	search string
+	count  int
+	cols   []string
+	rows   [][]string
+}
+
 func (m *Model) tableData() ([]string, [][]string) {
-	cols, rows := m.src.Rows(m.curKind().Key, m.namespace)
+	kind := m.curKind().Key
+	count := m.src.RowCount(kind, m.namespace)
+	if c := m.rowsMemo; c != nil && c.kind == kind && c.ns == m.namespace &&
+		c.search == m.rowSearch && c.count == count {
+		return c.cols, c.rows
+	}
+
+	cols, rows := m.buildTableData(kind)
+	m.rowsMemo = &rowsCache{
+		kind: kind, ns: m.namespace, search: m.rowSearch, count: count,
+		cols: cols, rows: rows,
+	}
+	return cols, rows
+}
+
+// buildTableData is tableData without the memo — the actual work, split out
+// so the cache has one entry point and one miss path.
+func (m *Model) buildTableData(kind string) ([]string, [][]string) {
+	cols, rows := m.src.Rows(kind, m.namespace)
 
 	// The Namespaces table doubles as the namespace switcher, so "all" leads
 	// it as a first-class choice. It is synthesized here rather than in a
 	// backend because it is not a namespace object — it is a view over all
 	// of them. Doing it in tableData keeps rendering, selection and click
 	// targets working from one definition.
-	if m.curKind().Key == "namespaces" {
+	if kind == "namespaces" {
 		rows = append([][]string{allNamespacesRow(cols)}, rows...)
 	}
 
@@ -915,8 +962,26 @@ type layout struct {
 	statusY          int
 }
 
+// headerRows is how many rows the top banner gets, by terminal width.
+//
+// Four rows is right when there is room for them: identity, a blank, the
+// cluster gauges with their absolute figures, and a rule. At 80x24 it is a
+// third of the screen spent before the first pod, and two of those four rows
+// carry nothing — so the blank and the rule go first, then the identity line
+// and the gauges share one row.
+func headerRows(w int) int {
+	switch {
+	case w >= 120:
+		return 4
+	case w >= 96:
+		return 2
+	default:
+		return 1
+	}
+}
+
 func (m *Model) layout() layout {
-	l := layout{headerH: 4, promptH: 3}
+	l := layout{headerH: headerRows(m.w), promptH: 3}
 	if m.promptZoom {
 		// Half the screen: enough to read a long command or an AI prompt
 		// while composing it, without hiding the table entirely.
@@ -930,8 +995,17 @@ func (m *Model) layout() layout {
 		l.midH = 3
 	}
 	l.leftW, l.rightW = 22, 24
-	if m.w < 96 {
+	if m.w < 120 {
 		l.leftW, l.rightW = 18, 20
+	}
+	// Below 96 the two side panes were taking 38 of 80 columns — nearly half
+	// the screen — to show a static verb list and a sidebar, while NAME was
+	// being truncated to `web-frontend-6b8c…`. The Actions pane goes first:
+	// its keys are also on the status bar and in the palette, whereas the
+	// sidebar is the only thing saying where you are. `z` still collapses
+	// both.
+	if m.w < 96 {
+		l.rightW = 0
 	}
 	if m.zoomed {
 		l.leftW, l.rightW = 0, 0
@@ -953,8 +1027,10 @@ func (m *Model) visibleRows() int {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// A message may be the one that added a kind, so this message sees a
-	// fresh list rather than the previous frame's.
+	// fresh list rather than the previous frame's. Same for the rows: an
+	// informer update between two messages must not be hidden by a memo.
 	m.kindsMemo = nil
+	m.rowsMemo = nil
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height

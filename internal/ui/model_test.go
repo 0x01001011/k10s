@@ -83,34 +83,99 @@ func TestViewDoesNotBuildRowsForEveryKind(t *testing.T) {
 	src.rowCounts.Store(0)
 	_ = m.View()
 
+	// One per kind was the original threshold, and with thirty kinds it left
+	// roughly seven times more slack than the real number ever used — enough
+	// to hide the main pane regressing from one row build to twenty-five. The
+	// true answer is one, so that is what this asserts; nKinds stays in the
+	// message because it is what makes the number meaningful.
 	gotRows := src.rows.Load()
-	if gotRows >= int64(nKinds) {
-		t.Errorf("one View() called Rows() %d times with %d kinds — the sidebar must use RowCount, not Rows, per kind", gotRows, nKinds)
+	if gotRows > 1 {
+		t.Errorf("one View() called Rows() %d times with %d kinds — the sidebar must use RowCount, not Rows, per kind, and the main pane must build its rows once", gotRows, nKinds)
 	}
 	if src.rowCounts.Load() == 0 {
 		t.Error("expected the sidebar to use RowCount for its badges")
 	}
 }
 
+// TestViewBuildsRowsOnce is the T37 guard. tableData() is the single read
+// path for the table, and before the memo it was called four to six times per
+// frame — the search box, the body, curName() twice via curRow(), and
+// rowStatus twice more on Nodes — each one a full formatted row build. At
+// 2000 pods that is 488µs and 8018 allocations per call.
+//
+// TestViewDoesNotBuildRowsForEveryKind above only asserts the sidebar is not
+// using Rows for its badges, and its threshold (one per kind) leaves enough
+// slack to hide this entirely. This one pins the actual number.
+func TestViewBuildsRowsOnce(t *testing.T) {
+	for _, kind := range []string{"pods", "nodes", "namespaces"} {
+		t.Run(kind, func(t *testing.T) {
+			src := &countingSource{Source: mock.New("")}
+			m := newTestModel(t, src)
+			m.jumpToResource(kind)
+
+			src.rows.Store(0)
+			_ = m.View()
+
+			if got := src.rows.Load(); got != 1 {
+				t.Errorf("one View() on %s called Rows() %d times, want 1 — tableData must be memoised per frame", kind, got)
+			}
+		})
+	}
+}
+
+// TestRowsMemoDoesNotOutliveAFrame is the other half of T37: a memo that is
+// never cleared is a cache, and a cache of informer-derived rows shows the
+// user a cluster that has stopped changing.
+func TestRowsMemoDoesNotOutliveAFrame(t *testing.T) {
+	src := &countingSource{Source: mock.New("")}
+	m := newTestModel(t, src)
+
+	src.rows.Store(0)
+	_ = m.View()
+	_ = m.View()
+
+	if got := src.rows.Load(); got != 2 {
+		t.Errorf("two View() calls made %d Rows() calls, want 2 — the memo must be cleared at the top of every frame", got)
+	}
+
+	// A message must invalidate it too: Update runs before the next View, and
+	// anything it does (switching kind, namespace, filter) changes the rows.
+	src.rows.Store(0)
+	m.Update(key("down"))
+	if got := src.rows.Load(); got == 0 {
+		t.Error("Update did not rebuild rows at all — selection bounds read stale data")
+	}
+}
+
 // TestKeypressLatency guards responsiveness directly: a navigation keypress
 // plus the frame it produces must stay far below human-perceptible lag.
+//
+// It drives the arrow keys, not j/k. In focusMain, j is unbound and k calls
+// openPrompt("k") (handleKey), so the old loop moved focus to the prompt on
+// its second iteration and every later keystroke was typed into a text field
+// that grew to some four hundred characters. What it measured after that was
+// a zoomed prompt with a suggestion overlay — not table navigation. The focus
+// assertion below is what keeps it honest if someone rebinds a key again.
 func TestKeypressLatency(t *testing.T) {
 	m := newTestModel(t, mock.New(""))
 
 	// warm up (first frame builds caches/styles)
-	m.Update(key("j"))
+	m.Update(key("down"))
 	_ = m.View()
 
 	const iterations = 200
 	start := time.Now()
 	for i := 0; i < iterations; i++ {
-		m.Update(key("j"))
+		m.Update(key("down"))
 		_ = m.View()
-		m.Update(key("k"))
+		m.Update(key("up"))
 		_ = m.View()
 	}
 	perFrame := time.Since(start) / (iterations * 2)
 
+	if m.focus != focusMain {
+		t.Fatalf("the drive loop left focus on %v, not the table — this benchmark is measuring the wrong pane", m.focus)
+	}
 	if raceEnabled {
 		t.Skipf("race detector instrumentation dominates the measurement (%v/frame)", perFrame)
 	}

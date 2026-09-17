@@ -13,8 +13,10 @@ import (
 )
 
 func (m *Model) View() string {
-	// One kind list per frame; see Model.kindsMemo.
+	// One kind list and one row build per frame; see Model.kindsMemo and
+	// Model.rowsMemo.
 	m.kindsMemo = nil
+	m.rowsMemo = nil
 	if m.w < 10 || m.h < 8 {
 		return ""
 	}
@@ -83,6 +85,85 @@ func gauge(th theme.Theme, pct, width int) string {
 	return on + off + " " + num
 }
 
+// hseg is one header segment: the styled string, its width without styling,
+// and how readily it is given up when the terminal is narrow.
+//
+// Segments are dropped whole. The header used to be assembled at full length
+// and then cut by the block, which at 80 columns reported a node count of
+// "nodes" and a memory total of "81" — and left the ns and theme buttons
+// marked as click targets off the right-hand edge, so the mouse affordance
+// died without saying so.
+type hseg struct {
+	render string
+	plain  string
+	prio   int
+	// lead is the separator drawn before this segment, and is emitted only
+	// when something precedes it — otherwise a dropped first segment leaves
+	// the header opening on a bare "  │  ".
+	lead      string
+	leadPlain string
+}
+
+// fitSegs drops the lowest-priority segments until the rest fit in width,
+// then joins the survivors in their original order. It returns the joined
+// string and the width it actually occupies.
+//
+// Dropping is by priority rather than by position because position is not
+// importance: the version sits between the context name and the node count
+// and is the first thing nobody reads during an incident.
+func fitSegs(segs []hseg, width int) (string, int) {
+	keep := make([]bool, len(segs))
+	for i := range segs {
+		keep[i] = true
+	}
+
+	// width() is recomputed rather than adjusted, because dropping the first
+	// kept segment also drops a separator that was not being counted.
+	width_ := func() int {
+		total, first := 0, true
+		for i, s := range segs {
+			if !keep[i] {
+				continue
+			}
+			if !first {
+				total += lipgloss.Width(s.leadPlain)
+			}
+			total += lipgloss.Width(s.plain)
+			first = false
+		}
+		return total
+	}
+
+	for width_() > width {
+		worst, worstPrio := -1, 0
+		for i, s := range segs {
+			if keep[i] && (worst < 0 || s.prio < worstPrio) {
+				worst, worstPrio = i, s.prio
+			}
+		}
+		if worst < 0 {
+			break
+		}
+		keep[worst] = false
+	}
+
+	var b strings.Builder
+	out, first := 0, true
+	for i, s := range segs {
+		if !keep[i] {
+			continue
+		}
+		if !first {
+			b.WriteString(s.lead)
+			out += lipgloss.Width(s.leadPlain)
+		}
+		b.WriteString(s.render)
+		out += lipgloss.Width(s.plain)
+		first = false
+	}
+	return b.String(), out
+}
+
 func (m *Model) viewHeader(l layout) Block {
 	th := m.th()
 	inner := m.w - 2
@@ -138,26 +219,63 @@ func (m *Model) viewHeader(l layout) Block {
 		demoTag = paint(th.Bg, th.Warn, true, " DEMO") +
 			paint(th.Bg, th.Subtle, false, " sample data · :ctx to leave")
 	}
-	line0 := brand + sep + paint(th.Bg, ctxCol, false, ctxTxt) + demoTag +
-		sep + paint(th.Bg, th.Subtle, false, "ver ") + paint(th.Bg, th.Fg, false, ci.Version) +
-		sep + paint(th.Bg, th.Subtle, false, "nodes ") + paint(th.Bg, nodeCol, false, nodeTxt)
+	// A narrow terminal cannot afford three five-cell separators of pure
+	// decoration, and the demo banner shrinks to the one word that matters —
+	// it still has to be on every frame, because every figure above it is
+	// sample data.
+	sepPlain := "  │  "
+	if m.w < 120 {
+		sepPlain = " · "
+		sep = paint(th.Bg, th.Border, false, sepPlain)
+	}
+	demoPlain := ""
+	if m.demoMode() {
+		demoPlain = " DEMO sample data · :ctx to leave"
+		if m.w < 120 {
+			demoPlain = " DEMO"
+			demoTag = paint(th.Bg, th.Warn, true, demoPlain)
+		}
+	}
 
 	// Right-hand buttons: namespace, then theme. Both are clickable and
 	// both say what they currently are, so the header doubles as status.
-	nsPlain := "ns " + m.namespace + " ▾"
 	nsBtn := m.mark("nsbtn", paint(th.Bg, th.Subtle, false, "ns ")+paint(th.Bg, th.Accent2, false, m.namespace)+paint(th.Bg, th.Subtle, false, " ▾"))
-
-	themePlain := "theme " + m.th().Name + " ⟳"
 	themeTag := m.mark("theme", paint(th.Bg, th.Subtle, false, "theme ")+paint(th.Bg, th.Accent, false, m.th().Name)+paint(th.Bg, th.Subtle, false, " ⟳"))
 
-	right := nsBtn + paint(th.Bg, th.Border, false, "  │  ") + themeTag
-	rightPlain := nsPlain + "  │  " + themePlain
+	// Every segment carries its own leading separator, so dropping one drops
+	// its separator with it. Priorities say what survives a narrow terminal:
+	// which cluster you are pointed at outranks the product name, and the
+	// version is the first thing nobody is reading during an incident.
+	lead := func(s hseg) hseg { s.lead, s.leadPlain = sep, sepPlain; return s }
+	leftSegs := []hseg{
+		{render: brand, plain: " ⎈ k10s", prio: 60},
+		lead(hseg{render: paint(th.Bg, ctxCol, false, ctxTxt), plain: ctxTxt, prio: 100}),
+		// The demo tag is its own segment. Folded into the context segment it
+		// would outrank everything on the line and then be dropped as a unit,
+		// taking the context name with it and leaving a header that says
+		// nothing at all.
+		{render: demoTag, plain: demoPlain, prio: 97},
+		lead(hseg{render: paint(th.Bg, th.Subtle, false, "ver ") + paint(th.Bg, th.Fg, false, ci.Version), plain: "ver " + ci.Version, prio: 20}),
+		// Node readiness outranks the namespace button: the namespace is also
+		// in the main panel title, whereas nothing else says a node is down.
+		lead(hseg{render: paint(th.Bg, th.Subtle, false, "nodes ") + paint(th.Bg, nodeCol, false, nodeTxt), plain: "nodes " + nodeTxt, prio: 95}),
+	}
+	rightSegs := []hseg{
+		{render: nsBtn, plain: "ns " + m.namespace + " ▾", prio: 90},
+		lead(hseg{render: themeTag, plain: "theme " + m.th().Name + " ⟳", prio: 30}),
+	}
 
-	gapw := inner - lipgloss.Width(line0) - lipgloss.Width(rightPlain)
+	// The buttons are the only mouse affordance up here, so they get their
+	// half of the line first; whatever they do not use goes to the identity
+	// segments, and at least one column stays between the two.
+	right, rightW := fitSegs(rightSegs, inner/2)
+	left, leftW := fitSegs(leftSegs, maxi(0, inner-rightW-1))
+
+	gapw := inner - leftW - rightW
 	if gapw < 1 {
 		gapw = 1
 	}
-	line0 += paint(th.Bg, th.Bg, false, spaces(gapw)) + right
+	line0 := left + paint(th.Bg, th.Bg, false, spaces(gapw)) + right
 
 	// Both gauges carry a direction arrow after the percentage. Only real
 	// readings are tracked: with no nodes the totals are placeholders, and
@@ -166,13 +284,30 @@ func (m *Model) viewHeader(l layout) Block {
 		m.cpuTrend.observe(cpuPct, m.anim)
 		m.memTrend.observe(memPct, m.anim)
 	}
-	totals := paint(th.Bg, th.Subtle, true, " CPU  ") + gauge(th, cpuPct, 16) +
+	// The gauges shrink before they clip, and the absolute figures are the
+	// first thing to go: "18.4/48 cores" is context, the percentage and the
+	// bar are the reading. At 80 columns the old fixed pair needed 82 cells
+	// for a 74-cell row, which is how "81.9/192.0 GiB" became "81".
+	gw := 16
+	figures := true
+	switch {
+	case m.w < 96:
+		gw, figures = 6, false
+	case m.w < 120:
+		gw, figures = 10, false
+	}
+	cores, gib := "", ""
+	if figures {
+		cores = fmt.Sprintf("  %.1f/%.0f cores", usedCores, totalCores)
+		gib = fmt.Sprintf("  %.1f/%.1f GiB", usedGiB, totalGiB)
+	}
+	totals := paint(th.Bg, th.Subtle, true, " CPU  ") + gauge(th, cpuPct, gw) +
 		paint(th.Bg, th.Bg, false, " ") + trendGlyph(th, th.Bg, m.cpuTrend.arrow(m.anim)) +
-		paint(th.Bg, th.Subtle, false, fmt.Sprintf("  %.1f/%.0f cores", usedCores, totalCores)) +
+		paint(th.Bg, th.Subtle, false, cores) +
 		paint(th.Bg, th.Bg, false, "    ") +
-		paint(th.Bg, th.Subtle, true, "MEM  ") + gauge(th, memPct, 16) +
+		paint(th.Bg, th.Subtle, true, "MEM  ") + gauge(th, memPct, gw) +
 		paint(th.Bg, th.Bg, false, " ") + trendGlyph(th, th.Bg, m.memTrend.arrow(m.anim)) +
-		paint(th.Bg, th.Subtle, false, fmt.Sprintf("  %.1f/%.1f GiB", usedGiB, totalGiB))
+		paint(th.Bg, th.Subtle, false, gib)
 	// nn is clamped to 1 so the averages above cannot divide by zero, which
 	// with no nodes at all would print "0.0/16 cores" — a capacity figure for
 	// a cluster that isn't there. Say nothing instead.
@@ -184,11 +319,35 @@ func (m *Model) viewHeader(l layout) Block {
 	// paint(th.Bg, th.Bg, false, "    ") +
 	// paint(th.Bg, th.Subtle, false, "per-node view → Resources ▸ Nodes")
 
-	lines := []string{
-		line0,
-		"",
-		totals,
-		paint(th.Bg, th.Border, false, spaces(1)+strings.Repeat("╌", maxi(1, inner))),
+	// Four rows when there is room; otherwise the blank and the rule go
+	// first, and below 96 the identity and the gauges share one row. See
+	// headerRows.
+	var lines []string
+	switch l.headerH {
+	case 1:
+		// One row: whatever of the identity and the buttons survives, then
+		// the gauges hard right — they are the only thing up here that
+		// changes second to second. The ns button competes on the same line
+		// rather than being dropped outright, because it is the only mouse
+		// affordance in the header and it also states the current namespace.
+		gaugesW := lipgloss.Width(" CPU  ") + gw + 6 + 4 + lipgloss.Width("MEM  ") + gw + 6
+		// On a two-part line the gap separates the groups, so rightSegs[0]
+		// carries no separator of its own; on one line it needs one.
+		oneRow := append(append([]hseg{}, leftSegs...), lead(rightSegs[0]))
+		oneRow = append(oneRow, rightSegs[1:]...)
+
+		head, headW := fitSegs(oneRow, maxi(0, inner-gaugesW-1))
+		pad := maxi(1, inner-headW-gaugesW)
+		lines = []string{head + paint(th.Bg, th.Bg, false, spaces(pad)) + totals}
+	case 2:
+		lines = []string{line0, totals}
+	default:
+		lines = []string{
+			line0,
+			"",
+			totals,
+			paint(th.Bg, th.Border, false, spaces(1)+strings.Repeat("╌", maxi(1, inner))),
+		}
 	}
 	return BlockOf(m.w, l.headerH, lines, th.Bg)
 }
