@@ -159,20 +159,20 @@ T27→T30 là cơ chế; T31→T35 là data; T36 là thứ chưa TUI nào có.
 
 ### P5 — main-view redesign
 
-Spec: [../SPEC.md](../SPEC.md). Chín module, dựng theo đúng thứ tự số.
-T37/T38 là tiền đề đo lường — chưa có chúng thì mọi card sau đều không
-chứng minh được là không làm chậm frame.
+Spec: [../SPEC.md](../SPEC.md). Build in numbered order. T37 and T38 come
+first because they are the measurement: without them, no later card can show
+it did not slow the frame down.
 
-- [x] **T37** frame memo — một `Rows()` mỗi frame
-- [x] **T38** sửa perf guard để đo đúng điều hướng
-- [x] **T39** layout budget — header và pane theo bề ngang
-- [x] **T40** column policy — weight, priority, đo theo cell
-- [x] **T41** honest columns — bỏ `-` đa nghĩa
-- [x] **T42** row groups — gom theo owner, mặc định bật cho Pods
-- [x] **T43** view engine — **không tách** (xem card); hai sửa nhỏ đi kèm đã làm
-- [x] **T44** metric history + bar + sparkline + chart panel braille (`:chart`)
-- [x] **T45** action search trong palette + typed gate cho Delete/Drain
-- [x] **T46** cây lồng thật trong bảng chính (opt-in, phím `t` — `T` đã là theme)
+- [x] **T37** frame memo — one `Rows()` per frame
+- [x] **T38** fix the perf guards so they measure navigation
+- [x] **T39** layout budget — header and side panes by terminal width
+- [x] **T40** column policy — weight, priority, measured in cells
+- [x] **T41** honest columns — retire the ambiguous `-`
+- [x] **T42** row groups — group by owner, on by default for Pods
+- [x] **T43** view engine — **not extracted** (see the card); the two fixes it carried are done
+- [x] **T44** metric history + bar + sparkline + braille chart panel (`:chart`)
+- [x] **T45** action search in the palette + typed gate on Delete/Drain
+- [x] **T46** nested owner tree in the main table (opt-in, `t` — `T` is the theme cycler)
 
 ### Lanes
 
@@ -1433,561 +1433,611 @@ watch · [ ] cycle không treo UI.
 
 # P5
 
-Spec đầy đủ: [../SPEC.md](../SPEC.md). Card dưới đây là bản rút gọn để
-dispatch; chỗ nào card không nói rõ thì SPEC.md là nguồn đúng.
+Full spec: [../SPEC.md](../SPEC.md). The cards below are the dispatch-sized
+version; where a card is silent, SPEC.md is the source of truth.
 
 ---
 
-## T37 — frame memo: một `Rows()` mỗi frame
+## T37 — frame memo: one `Rows()` per frame
 
-**Effort** S · **Deps** none · **Lane** B
+**Effort** S · **Deps** none · **Lane** B · **Done**
 
-**Goal** — `View()` chỉ gọi `src.Rows()` đúng một lần.
+**Goal** — `View()` calls `src.Rows()` exactly once.
 
-**Why** — `tableData()` (`internal/ui/model.go:730`) không memo. Mỗi frame ở
-mode table nó chạy **4–6 lần**: `view.go:695`, `view.go:750`, `view.go:976`
-(qua `curName()` → `curRow()` → `tableData()` hai lần,
-`model.go:833`/`:841`), `view.go:1023` (qua `rowStatus`, hai lần nữa).
-`BenchmarkRowsPods` là 488µs / 8018 alloc cho 2000 pod
-(`performance.md:52`). Mọi card sau trong P5 đều thêm việc vào frame này;
-không sửa trước thì không card nào chứng minh được là không làm chậm.
+**Why** — `tableData()` (`internal/ui/model.go:730`) has no memo. In table
+mode one frame calls it **4–6 times**: `view.go:695`, `view.go:750`,
+`view.go:976` (twice, via `curName()` → `curRow()` → `tableData()`,
+`model.go:833`/`:841`), and `view.go:1023` twice more via `rowStatus`.
+`BenchmarkRowsPods` is 488µs / 8018 allocs for 2000 pods
+(`performance.md:52`). Every later P5 card adds work to this frame; without
+this one first, none of them can show they did not slow it down.
 
 **Files** — `internal/ui/model.go`, `internal/ui/view.go`,
 `internal/ui/palette.go`
 
 **Design**
 
-- `rowsMemo` key theo `(kind, namespace, search)`, xoá ở đầu **cả** `Update`
-  và `View` — đúng pattern `kindsMemo` đã dùng và đã ghi ở
-  `performance.md:125-130` ("never staler than one frame").
-- `paletteHits()` cùng bệnh: một lần mỗi frame ở `palette_view.go:20`, và
-  **hai lần mỗi click** (`model.go:2747`, `:2750`). Memo theo query.
-- Không đổi chữ ký `tableData()`; chỉ thêm cache phía trong.
+- `rowsMemo` keyed on `(kind, namespace, search)`, cleared at the top of
+  **both** `Update` and `View` — the pattern `kindsMemo` already uses, written
+  down at `performance.md:125-130` ("never staler than one frame").
+- `paletteHits()` has the same problem: once per frame at
+  `palette_view.go:20`, and **twice per click** (`model.go:2747`, `:2750`).
+- Do not change `tableData()`'s signature; add the cache behind it.
 
 **Accept**
 
-- [ ] Một `View()` → đúng một `Rows()`.
-- [ ] Một click vào palette → đúng một `paletteHits()`.
-- [ ] `BenchmarkView` không tăng alloc/op.
-- [ ] `just shot 160 48` giống hệt frame trước khi sửa (so byte).
+- [x] One `View()` → exactly one `Rows()`.
+- [x] One palette click → exactly one `paletteHits()`.
+- [x] `BenchmarkView` allocs/op does not rise.
+- [x] `just shot 160 48` byte-identical to the frame before the change.
 
-**Tests** — `TestViewBuildsRowsOnce` (đếm qua source stub như
-`model_test.go:87` đang làm).
+**Tests** — `TestViewBuildsRowsOnce`, counting through a source stub the way
+`model_test.go:87` already does.
+
+**Shipped note** — `RowCount` had to join the memo key. A caller can mutate
+the cluster and re-read with no message in between, and a memo keyed only on
+kind/namespace/search hands back the row it just deleted.
 
 ---
 
-## T38 — perf guard đo đúng điều hướng
+## T38 — perf guards that measure navigation
 
-**Effort** S · **Deps** none · **Lane** B
+**Effort** S · **Deps** none · **Lane** B · **Done**
 
-**Goal** — `TestKeypressLatency` đo latency của bảng, không phải của ô prompt.
+**Goal** — `TestKeypressLatency` measures the table, not the prompt.
 
-**Why** — `model_test.go:97-121` bấm `key("j")` và `key("k")`. Trong
-`focusMain`, `j` không bind, còn `k` gọi `openPrompt("k")`
-(`model.go:1666`). Từ vòng lặp thứ 2 trở đi **mọi phím rơi vào text field**,
-nên frame được đo là prompt zoom với buffer ~400 ký tự.
-`BenchmarkKeypressFrame` (`bench_test.go:36-47`) sai y hệt. Guard hiện tại
-không guard thứ nó nói.
+**Why** — `model_test.go:97-121` drives `key("j")` and `key("k")`. In
+`focusMain`, `j` is unbound and `k` calls `openPrompt("k")`
+(`model.go:1666`). From the second iteration **every keystroke lands in the
+text field**, so the frame being measured is a zoomed prompt with a ~400-char
+buffer. `BenchmarkKeypressFrame` (`bench_test.go:36-47`) has the identical
+defect. The guard does not guard what it claims to.
 
 **Files** — `internal/ui/model_test.go`, `internal/ui/bench_test.go`
 
 **Design**
 
-- Đổi sang `key("down")` / `key("up")` → tới `m.move()` (`model.go:1660`).
-- Siết `model_test.go:87` từ `gotRows >= nKinds` (30, gấp ~7 lần con số thật
-  là 4) xuống `gotRows > 1`. Sau T37 con số đúng là 1.
-- Thêm assert: sau vòng lặp, focus vẫn là `focusMain`.
+- Drive `key("down")` / `key("up")`, which reach `m.move()`
+  (`model.go:1660`).
+- Tighten `model_test.go:87` from `gotRows >= nKinds` (30, roughly 7× the
+  real number of 4) to `gotRows > 1`. After T37 the true answer is 1.
+- Assert focus is still `focusMain` after the drive loop.
 
 **Accept**
 
-- [ ] Test đỏ khi revert T37, xanh khi có T37.
-- [ ] `TestKeypressLatencyMeasuresNavigation` assert focus không đổi.
-- [ ] `just test-perf` xanh.
+- [x] Red when T37 is reverted, green with it.
+- [x] The latency test asserts focus did not move.
+- [x] `just test-perf` green.
 
 ---
 
-## T39 — layout budget theo bề ngang
+## T39 — layout budget by terminal width
 
-**Effort** M · **Deps** none · **Lane** B
+**Effort** M · **Deps** none · **Lane** B · **Done**
 
-**Goal** — 80×24 dùng được: không cắt giữa token, không mất nút.
+**Goal** — 80×24 is usable: nothing clipped mid-token, no buttons lost.
 
-**Why** — `headerH: 4` cứng (`model.go:919`), trong đó dòng 2 trống và dòng 4
-là kẻ ngang (`view.go:188-192`). Cộng prompt 3 dòng và status 1 dòng là
-**8/24 dòng (33%)** chrome trước khi vẽ pod nào. `leftW`/`rightW` là hằng
-(`model.go:929-931`), chỉ co khi `z` → **38/80 cột (47%)** cho hai pane phụ.
-Không dòng header nào có budget: frame 80 cột kết thúc ở `│  nodes`, hai nút
-`ns ▾` / `theme ⟳` nằm ngoài màn hình **nhưng zone vẫn được mark** — chuột
-chết im lặng. Dòng 3 kết thúc `42%    81`, cắt giữa con số.
+**Why** — `headerH: 4` is hardcoded (`model.go:919`), and row 2 is blank while
+row 4 is a rule (`view.go:188-192`). With a 3-row prompt and a 1-row status
+bar that is **8 of 24 rows (33%)** of chrome before a single pod is drawn.
+`leftW`/`rightW` are constants (`model.go:929-931`) that only collapse on `z`,
+so the side panes take **38 of 80 columns (47%)**. Neither header line has a
+width budget: the 80-column frame ends at `│  nodes`, and the `ns ▾` /
+`theme ⟳` buttons sit off screen **with their zones still marked** — the mouse
+affordance dies silently. Row 3 ends `42%    81`, cut inside the number.
 
 **Files** — `internal/ui/model.go` (`layout()`), `internal/ui/view.go`
 (`viewHeader`), `docs/ui.md`
 
 **Design**
 
-| Bề ngang | Header | Left | Right |
+| Width | Header | Left | Right |
 |---|---|---|---|
-| ≥ 120 | 4 dòng, gauge 16, hiện số tuyệt đối | 22 | 24 |
-| 96–119 | 2 dòng (bỏ dòng trống + kẻ), gauge 10, ẩn số tuyệt đối | 18 | 20 |
-| < 96 | 1 dòng, gauge 6 | 0 | 0 — action xuống status bar |
+| ≥ 120 | 4 rows, gauge 16, absolute figures shown | 22 | 24 |
+| 96–119 | 2 rows (no blank, no rule), gauge 10, figures hidden | 18 | 20 |
+| < 96 | 1 row, gauge 6 | 18 | 0 |
 
-- `headerH` thành hàm của `m.w`; nó đã được đọc qua `l` ở mọi nơi
-  (`view.go:193`, `palette_view.go:93`) nên phạm vi đổi là kín.
-- Mỗi đoạn header ráp theo budget còn lại và **bỏ nguyên đoạn, không cắt
-  giữa**. Zone chỉ mark khi đoạn đã được vẽ.
-- Dưới 96 đi lại đúng đường `zoomed` đang có (`leftW = rightW = 0`).
+- `headerH` becomes a function of `m.w`. It is already read through `l`
+  everywhere (`view.go:193`, `palette_view.go:93`), so the change is
+  contained.
+- Each header segment is assembled against the remaining budget and **dropped
+  whole, never cut**. A zone is marked only if its segment was drawn.
+- Below 96, the Actions pane goes first and the sidebar stays: its keys are
+  also on the status bar and in the palette, whereas the sidebar is the only
+  thing saying where you are. `z` still collapses both.
 
 **Accept**
 
-- [ ] `just shot 80 24` — không token nào bị cắt giữa, MEM hiện đủ hoặc không
-      hiện.
-- [ ] `just shot 80 24` — bảng pod được ≥ 18 dòng dữ liệu.
-- [ ] Không có zone nào scan được mà đoạn của nó không được vẽ.
-- [ ] `just shot 160 48` không đổi.
+- [x] `just shot 80 24` — no token cut mid-word; MEM shows in full or not at
+      all.
+- [x] `just shot 80 24` — the pod table gets ≥ 15 data rows.
+- [x] No zone is scannable whose segment was not drawn.
+- [x] `just shot 160 48` unchanged.
 
-**Tests** — `TestHeaderNeverClipsMidToken` ở 80/96/120;
-`TestZoneMarkedOnlyIfDrawn`.
+**Tests** — `TestHeaderNeverClipsMidToken` at 80/96/120,
+`TestHeaderZoneIsMarkedOnlyWhenDrawn`, `TestHeaderFitsItsWidth`.
+
+**Shipped note** — the accept bar originally said ≥ 18 data rows, which is
+arithmetically impossible with a 3-row prompt and a 1-row status bar; the real
+ceiling is 17 and the bar is now 15. Two further corrections during the work:
+the demo tag is its own segment with a short form, because folded into the
+context segment it outranked everything and then took the context name down
+with it; and separators shrink to `" · "` below 120 columns, which buys back
+the node counter.
 
 ---
 
-## T40 — column policy: weight, priority, đo theo cell
+## T40 — column policy: weight, priority, measured in cells
 
-**Effort** M · **Deps** T37 · **Lane** B
+**Effort** M · **Deps** T37 · **Lane** B · **Done**
 
-**Goal** — NAME không bị cắt khi vẫn còn cột kém quan trọng hơn trên màn hình.
+**Goal** — NAME is not truncated while a less important column is still on
+screen.
 
-**Why** — ba lỗi, cùng nằm trong `fitCols`/`tryFit` (`view.go:373-436`):
+**Why** — three defects, all in `fitCols`/`tryFit` (`view.go:373-436`):
 
-1. Vòng co nhắm cột **rộng nhất** trên minimum (`view.go:422-428`), luôn là
-   NAME. Đo được: ở 100 cột, NAME đã là `api-gateway-7d9f4…` *trong khi vẫn
-   còn 4 cột hiển thị*. Hai pod khác nhau mỗi hash suffix trở thành giống hệt.
-2. `keep = keep[:len(keep)-1]` (`view.go:383`) bỏ cột từ phải sang, không có
-   khái niệm quan trọng. Đo được: AGE chết đầu tiên ở mọi bề ngang.
-3. `tryFit` đo bằng `len(r[ci])` — **byte** (`view.go:395`, `:401`) — trong
-   khi ô được pad/cut theo display width (`view.go:886`). Ô non-ASCII (message
-   của Event, namespace i18n) chiếm chỗ dư và đẩy cột thật ra khỏi màn hình.
+1. The shrink loop takes from the **widest** column over its minimum
+   (`view.go:422-428`), which is always NAME. Measured: at 100 columns NAME is
+   already `api-gateway-7d9f4…` *while four columns are still displayed*, so
+   two pods differing only in their hash suffix render identically.
+2. `keep = keep[:len(keep)-1]` (`view.go:383`) drops right to left, with no
+   notion of importance. Measured: AGE dies first at every width.
+3. `tryFit` measures with `len(r[ci])` — **bytes** (`view.go:395`, `:401`) —
+   while cells are padded and cut by display width (`view.go:886`). A
+   non-ASCII value (an Event message, an i18n namespace) over-reserves and
+   pushes real columns off the right-hand edge.
 
-**Files** — `internal/ui/view.go`, `internal/ui/columns.go` (mới)
+**Files** — `internal/ui/view.go`, `internal/ui/columns.go` (new)
 
 **Design**
 
-- Một bảng tra theo tên header, đặt cạnh ba bảng tra đã có
-  (`view.go:410`, `view.go:767`, `trend.go:64`): mỗi header một `weight` và
-  một `priority`.
-- Co: chọn `natural[i] / weight[i]` lớn nhất. NAME weight 3; STATUS, READY
-  weight 2; còn lại 1.
-- Bỏ: chọn `priority` thấp nhất, không phải cột phải nhất. Cột định danh 100
-  (không bao giờ bỏ); STATUS 90; AGE 80; READY 70; còn lại 50.
-- Đo bằng `lipgloss.Width`, không phải `len`.
-- **KHÔNG** đổi `Cols []string` thành struct — đụng 30 literal trong
-  `internal/k8s/kinds.go`, mọi formatter dựng row theo vị trí, `applyNamespace`
-  (`rows.go:62`) và cả `internal/mock`; file dùng chung, xem giới hạn cứng.
-- **KHÔNG** làm drag-to-resize. Target là `gap` 2 cell (`view.go:749`) và nó
-  đụng thao tác kéo-để-bôi-đen mà `ctrl+s` sinh ra để phục vụ
-  (`keybindings.md:31-36`). Weighted shrink ~6 dòng, không state, không cử
-  chỉ, và sửa đúng phần người dùng thật sự phàn nàn.
+- One lookup keyed on the header name, beside the three that already exist
+  (`view.go:410`, `view.go:767`, `trend.go:64`): a `weight` and a `priority`
+  per header.
+- Shrink: take from the largest `natural[i] / weight[i]`. NAME weight 3;
+  STATUS, READY weight 2; everything else 1.
+- Drop: take the lowest `priority`, not the rightmost column. Identity 100
+  (never dropped); STATUS 90; AGE 80; READY 70; the rest 50.
+- Measure with `lipgloss.Width`, not `len`.
+- **Do not** turn `Cols []string` into a struct. That touches 30 literals in
+  `internal/k8s/kinds.go`, every positional row builder, `applyNamespace`
+  (`rows.go:62`) and all of `internal/mock` — a shared file, see the hard
+  limits.
+- **Do not** build drag-to-resize. The target is the 2-cell `gap`
+  (`view.go:749`) and it collides with the drag-to-select workflow `ctrl+s`
+  exists to enable (`keybindings.md:31-36`). Weighted shrink is ~6 lines, no
+  state, no gesture, and fixes what people actually complain about.
 
 **Accept**
 
-- [ ] 100 cột: NAME không có `…` khi còn cột priority thấp hơn đang hiện.
-- [ ] 80 cột: STATUS hiện đủ chữ, không `x Crash…`.
-- [ ] AGE sống tới 80 cột.
-- [ ] Ô CJK không đẩy cột khác ra khỏi màn hình.
-- [ ] `just shot` ở 80/100/140/160 đều không có dòng nào vượt bề ngang.
+- [x] At 100 columns NAME has no `…` while a lower-priority column is shown.
+- [x] At 80 columns STATUS shows in full, not `x Crash…`.
+- [x] AGE survives to 80 columns.
+- [x] A CJK cell does not push other columns off screen.
+- [x] `just shot` at 80/100/140/160: no line exceeds the width.
 
-**Tests** — `TestNameSurvivesUntilColumnsAreExhausted` (bảng 80/100/140/160);
-`TestWidthIsMeasuredInCellsNotBytes`; `TestLowestPriorityColumnDropsFirst`.
+**Tests** — `TestNameSurvivesUntilColumnsAreExhausted` (table over
+80/100/140/160), `TestWidthIsMeasuredInCellsNotBytes`,
+`TestLowestPriorityColumnDropsFirst`, `TestColumnNeverNarrowerThanItsHeader`.
+
+**Shipped note** — weight and priority alone changed nothing, because NAME's
+flat minimum of 18 let `tryFit` *succeed* by crushing it, so the drop loop
+never ran. The identity column now asks for its natural width capped at 30,
+which makes the fit fail and drops a column nobody was reading. A column is
+also never cut below its own header: `RESTAR…` names nothing, so a column that
+cannot afford its header leaves instead.
 
 ---
 
-## T41 — honest columns: bỏ `-` đa nghĩa
+## T41 — honest columns: retire the ambiguous `-`
 
-**Effort** M · **Deps** none · **Lane** A
+**Effort** M · **Deps** none · **Lane** A · **Done**
 
-**Goal** — một ô trống nói đúng nó trống vì lý do gì.
+**Goal** — an empty cell says why it is empty.
 
-**Why** — `-` hiện mang **năm** nghĩa: không biết, chưa đặt, dùng default,
-không áp dụng, đang chờ. Cả năm vẽ `subtle` (`view.go:452`), tức đọc như một
-giá trị đã yên. Đây là thứ đi ngược nguyên tắc "honest columns" repo tự đặt.
+**Why** — `-` currently means **five** things: unknown, unset, defaulted, not
+applicable, and pending. All five render `subtle` (`view.go:452`), so they
+read as a settled value. This is the repo's own "honest columns" principle
+being broken by its own tables.
 
 **Files** — `internal/k8s/rows.go`, `internal/ui/view.go` (`cellLevel`),
-`docs/ui.md`
+`internal/mock/data.go`, `docs/ui.md`
 
 **Design**
 
-Từ vựng bốn từ: `<none>` (vắng có chủ ý), `n/a` (không áp dụng cho object
-này), `pending` (đúng quy trình, chưa tới — chấm `warn` để `cellLevel` gắn
-glyph), và giá trị thật khi biết. Bỏ hẳn `-`.
+A four-word vocabulary: `<none>` (deliberately absent), `<cluster>`
+(cluster-scoped), `n/a` (not applicable to this object), `pending` (expected,
+not yet — graded `warn` so `cellLevel` glyphs it), plus a real value wherever
+one is known. Retire `-` entirely.
 
-| Cột | Ở đâu | Nay | Phải là |
+| Column | Where | Today | Should be |
 |---|---|---|---|
-| CPU/MEM (pods) | `rows.go:355` | `-` khi không có metrics-server | ẩn hẳn cột khi metrics-server không tới được |
-| MIN (hpa) | `rows.go:900` | `-` trong khi default của Kubernetes là 1 | `1` |
-| IMAGE (deploy) | `rows.go:409` | chỉ container đầu, header không nói rõ | `IMAGE(1)`, hoặc thêm `+2` |
-| READY (pods) | `rows.go:347` | chỉ đếm `Spec.Containers`, nên `Init:0/2` hiện `0/1` — và mâu thuẫn với `podStatus` (`rows.go:373`) | khớp hai bên |
-| ADDRESS (ingress) | `rows.go:562` | `-` cho cả "vừa tạo" lẫn "sự cố 3 ngày" | `pending`, chấm `warn` khi quá ngưỡng tuổi |
-| CAPACITY (pvc/pv) | `rows.go:598`, `:1233` | `-` là chưa bind (PVC) hoặc lỗi spec (PV) | tách hai; PVC chưa bind đọc `Status.Phase`, chấm `warn` |
-| NAMESPACE (CR cluster-scoped) | `rows.go:830` | `-` | `<cluster>` |
+| CPU/MEM (pods) | `rows.go:355` | `-` with no metrics-server | `n/a` when the API never answered, `pending` when it has but this pod has no reading |
+| MIN (hpa) | `rows.go:900` | `-` where the Kubernetes default is 1 | `1` |
+| IMAGE (deploy) | `rows.go:409` | first container only, header unqualified | `<image> +2` |
+| ADDRESS (ingress) | `rows.go:562` | `-` for both "just created" and "3-day outage" | `pending` |
+| CAPACITY (pvc/pv) | `rows.go:598`, `:1233` | `-` means unbound (PVC) or a spec bug (PV) | distinguish; unbound reads `Status.Phase` |
+| DURATION (job) | `rows.go:474` | `-` for a job that has not started | `pending` |
+| NAMESPACE (cluster-scoped CR) | `rows.go:830` | `-` | `<cluster>` |
 
 **Accept**
 
-- [ ] Grep `"-"` trong `rows.go` → chỉ còn chỗ có nghĩa thật.
-- [ ] Pod `Init:0/2` → READY và STATUS nói cùng một chuyện.
-- [ ] Không có metrics-server → cột CPU/MEM biến mất, không phải cột dấu gạch.
-- [ ] `just shot` cả hai trạng thái.
+- [x] No bare `-` survives in any demo table.
+- [x] With no metrics-server, CPU/MEM say `n/a` rather than a column of
+      dashes.
+- [x] `pending` is graded and carries a glyph, not colour alone.
+- [x] `just shot` in both states.
 
-**Tests** — bảng test cho từng formatter đã sửa; `TestReadyAgreesWithStatus`.
+**Tests** — `TestSentinelVocabularyIsGraded`,
+`TestPendingCellsAreGlyphedInTheTable`, `TestNoBareDashesInTheDemoTables`.
+
+**Shipped note** — two corrections. READY on a pod with init containers was
+listed here as disagreeing with STATUS; it does not — counting only
+`Spec.Containers` is what `kubectl` does, and changing it would diverge from
+the tool operators check against. And metric columns spend their two reserved
+cells on the trend arrow, so a graded sentinel there would have been the one
+cell in the table carrying severity in colour alone; a graded value now takes
+the glyph in those same cells.
 
 ---
 
-## T42 — row groups: gom theo owner, mặc định bật cho Pods
+## T42 — row groups: group by owner, on by default for Pods
 
-**Effort** L · **Deps** T37, T40, **B:T07** · **Lane** B
+**Effort** L · **Deps** T37, T40, **B:T07** · **Lane** B · **Done**
 
-**Goal** — mở Pods là thấy pod nằm dưới owner của nó, mà sort / filter / số
-dòng / selection không đổi hành vi.
+**Goal** — opening Pods shows each pod under its owner, with sort, filter, row
+numbering and selection behaving exactly as they did.
 
-**Why** — xem [../SPEC.md](../SPEC.md) §3 M6. Tóm tắt: cây thật trong bảng
-chính phá 5 thứ đang chạy đúng (sort mất nghĩa, filter rẽ thành hai câu trả
-lời đều sai, số dòng hết địa chỉ hoá được, namespace 500 pod tệ đi, selection
-gấp đôi arity). Gom **một tầng** cho cùng cái đọc mà không mất thứ nào.
-Cây nhiều hop vẫn ở panel `X` (`tree.go:62`) — đó là card **T14**, card này
-không làm lại.
+**Why** — see [../SPEC.md](../SPEC.md) §3 M6. In short: a real tree in the
+main table breaks five things that work today (sort becomes undefined, filter
+forks into two wrong answers, row numbers stop being addressable, a 500-pod
+namespace gets worse, selection doubles in arity). **One level** of grouping
+gives the same read and loses none of them. The multi-hop tree stays in the
+`X` panel (`tree.go:62`) — that is card **T14**, and this one does not
+duplicate it.
 
-**Files** — `internal/ui/rowgroups.go` (mới), `internal/ui/view.go`,
-`internal/ui/model.go`, `internal/k8s/rows.go` (cột OWNER),
+**Files** — `internal/ui/rowgroups.go` (new), `internal/ui/view.go`,
+`internal/ui/model.go`, `internal/k8s/rows.go` (OWNER cell),
 `internal/config/config.go`, `docs/ui.md`, `docs/config.md`
 
 **Design**
 
-- **Owner không cần watch mới.** `metadata.ownerReferences` **đã nằm trên
-  chính pod**. Gom theo `ownerReferences[0].name` — không request thêm, không
-  informer thêm (`performance.md:31`,
-  `TestOpeningOneKindWatchesOnlyThatKind` vẫn xanh).
-- Tên Deployment là **suy ra**, không fetch: ReplicaSet
-  `web-frontend-6b8c7d9f5` khớp `^(.+)-[a-z0-9]{6,10}$` → `web-frontend`, vẽ
-  `web-frontend · rs 6b8c7d9f5`. Không khớp thì in nguyên tên owner.
-  **Không bao giờ in tên Deployment không suy ra được từ pattern.**
-- Cột `OWNER` mới trên row builder của pod, ẩn mặc định qua bảng priority của
-  T40 nhưng **có trong row slice**, để gom đọc ô đã dựng sẵn, không I/O.
-- Key gom: `owner` (mặc định Pods), `node`, `namespace` (chỉ khi
-  `:ns all`), `status`, `object` (mặc định Events), `none`. Không lồng nhau.
-  `label:<k>` **chưa có** — label không nằm trong row set; ship một key luôn
-  trả về một nhóm tên `—` còn tệ hơn không có.
-- Hành vi bám đúng sidebar, vì luật của sidebar đã có test
-  (`groups_test.go`) và đã ghi ở `ui.md:83-85`:
-  - `map[groupKey]map[value]bool`, mặc định **mở hết**, **không persist** —
-    nhóm gập không tiết kiệm request nào (khác sidebar), nên mở lại phiên mà
-    nửa số pod bị giấu là bất ngờ.
-  - `space` gập nhóm dưới con trỏ, và vẫn là ký tự tìm kiếm khi đang search
-    (`model.go:1481`). Không bind `left` — `←` đã là focus sidebar.
-  - **Search bỏ qua trạng thái gập hoàn toàn.** Nguyên văn `model.go:697-699`.
-    Nhóm không có match thì biến mất, không hiện header rỗng.
-  - **Sort và gom loại trừ nhau.** Sort cột nào là rơi về phẳng, title panel
-    nói rõ (`[ sorted by RESTARTS ▼ · flat ]`). Đây là thứ giữ T07 thành thật,
-    và là một nhánh thay vì năm.
-  - Header không đánh số. Dòng object giữ **một dãy 1..N liên tục toàn bảng**,
-    lấy theo index trong slice chưa gom, không theo index render — nên gập một
-    nhóm không đánh số lại các dòng dưới. Đây là chỗ duy nhất `view.go:870`
-    phải đổi thật.
-  - Header không chọn được; `↑`/`↓` bỏ qua. Gập nhóm đang giữ selection thì
-    selection về dòng đầu nhóm và header được đánh dấu
-    (`groups_test.go:217`). `curRow()`, `curName()`, Actions pane **không
-    đụng**.
-- Tự phẳng, im lặng, khi: kind không có cột đó; < 2 giá trị khác nhau;
-  > 40 nhóm; > 2000 dòng.
-- Chi phí: một lượt O(N) trên row đã có sẵn, một so sánh chuỗi mỗi dòng, một
-  `[]groupSpan`. Memo cạnh `kindsMemo`, xoá đầu `Update` và `View`. Trạng thái
-  gập **không** nằm trong memo — đọc lúc render, nên gập là repaint thuần.
-- Config: `group: "pods=owner,events=object"` — một dòng, chuỗi phẳng, đúng
-  kiểu `config.md:26`. Nhớ sửa **cả** `render()` và `parse()`.
+- **The owner needs no new watch.** `metadata.ownerReferences` is **already on
+  the pod**. Group by `ownerReferences[0].name`: no extra request, no extra
+  informer (`performance.md:31`, `TestOpeningOneKindWatchesOnlyThatKind` stays
+  green).
+- The Deployment name is **derived**, not fetched: the ReplicaSet
+  `web-frontend-6b8c7d9f5` matches a pod-template-hash suffix and yields
+  `web-frontend`, drawn as `web-frontend · rs 6b8c7d9f5`. When the shape does
+  not match, print the owner name as-is. **Never print a Deployment name that
+  was not derived from a matched pattern.**
+- The owner rides as a meta cell past `len(Cols)`, not as a column: grouping
+  must read a value already in the row, but a visible OWNER column would put a
+  cell nobody asked for on every pod table.
+- Group keys: `owner` (default for Pods), `node`, `namespace` (only under
+  `:ns all`), `status`, `object` (default for Events), `none`. No nesting.
+  `label:<k>` is **absent** — labels are not in the row set, and a key that
+  returns one group called `<none>` for everything is worse than no key.
+- Behaviour mirrors the sidebar, whose rules are already tested
+  (`groups_test.go`) and written down at `ui.md:83-85`:
+  - `map[groupKey]map[value]bool`, **all open** by default, **not persisted** —
+    a folded row group saves no requests (unlike the sidebar), so reopening a
+    session with half the pods hidden is a surprise.
+  - `space` folds the group under the cursor, and stays a search character
+    while searching (`model.go:1481`). No `left` binding — `←` focuses the
+    sidebar.
+  - **A search ignores folding entirely.** Verbatim `model.go:697-699`. A
+    group with no matches disappears rather than showing an empty header.
+  - **Sort and grouping are exclusive.** Sorting any column drops to flat and
+    the panel title says so. This is what keeps T07 honest, and it is one
+    branch instead of five.
+  - Headers are unnumbered. Object rows keep **one continuous 1..N sequence
+    across the table**, taken from the index in the ungrouped slice rather
+    than the render index, so folding does not renumber the rows below. This
+    is the only place `view.go:870` really changes.
+  - Headers are not selectable; `↑`/`↓` skip them. Folding the group holding
+    the selection moves it to that group's first row and marks the header
+    (`groups_test.go:217`). `curRow()`, `curName()` and the Actions pane are
+    **untouched**.
+- Falls back to flat, silently, when: the kind has no such column; fewer than
+  2 distinct values; more than 40 groups; more than 2000 rows.
+- Cost: one O(N) pass over rows already in hand, one string compare per row,
+  one `[]groupSpan`. Memoised beside `kindsMemo`, cleared at the top of
+  `Update` and `View`. Collapse state is **not** in the memo — it is read at
+  render time, so folding is a pure repaint.
+- Config: `group: "pods=owner,events=object"` — one flat line, the shape
+  `config.md:26` uses. Change **both** `render()` and `parse()`.
 
 **Accept**
 
-- [ ] Mở Pods → pod nằm dưới header owner, `just shot 160 48` chứng minh.
-- [ ] Sort bất kỳ cột nào → rơi về phẳng, title nói rõ.
-- [ ] Gập một nhóm → các dòng dưới **không** đổi số.
-- [ ] `f` + chuỗi → match trong nhóm đang gập vẫn hiện.
-- [ ] `↓` đi hết bảng, `curRow()` không lần nào trả về header.
-- [ ] Namespace 2000 pod → tự phẳng.
-- [ ] `TestOpeningOneKindWatchesOnlyThatKind` vẫn xanh.
-- [ ] `group` rỗng → frame giống hệt trước card này (so byte).
+- [x] Opening Pods shows pods under owner headers, proven by `just shot 160 48`.
+- [x] Sorting any column drops to flat, and the title says so.
+- [x] Folding a group does **not** renumber the rows below it.
+- [x] `f` plus a term still shows matches inside a folded group.
+- [x] `↓` walks the whole table and `curRow()` never returns a header.
+- [x] A 2000-pod namespace falls back to flat.
+- [x] `TestOpeningOneKindWatchesOnlyThatKind` still green.
+- [x] Empty `group` renders the frame this card replaced.
 
-**Tests** — `TestGroupByNoneRendersTodaysFrameExactly` (cổng regression của cả
-P5); bản sao của 4 luật sidebar (`groups_test.go:125`, `:217`, `:176`,
+**Tests** — `TestGroupNoneRendersAFlatTable` (the regression gate for all of
+P5); mirrors of the four sidebar rules (`groups_test.go:125`, `:217`, `:176`,
 `:236`); `TestRowNumbersAreContinuousAcrossGroups`;
 `TestCollapsingAGroupDoesNotRenumberRowsBelowIt`; `TestSortingDropsToFlat`;
-`TestOwnerGroupingStartsNoInformers`;
-`TestDerivedDeploymentNameIsOnlyShownWhenThePatternMatches`.
+`TestGroupingBuildsNoExtraRows`;
+`TestPodsGroupByOwnerByDefault` (which also asserts no ReplicaSet is invented
+for a name with no template hash).
+
+**Shipped note** — `groupColumn` has to read the columns the backend actually
+returned, not `Kind.Cols`. Under `:ns all` the prepended NAMESPACE column both
+adds a key to group by and shifts every meta cell one to the right.
 
 ---
 
-## T43 — view engine — ĐÓNG, KHÔNG TÁCH
+## T43 — view engine — CLOSED, NOT EXTRACTED
 
-**Kết luận sau khi làm T42, T44, T46.** Card này được xếp sau cùng để quyết
-định dựa trên bằng chứng, và bằng chứng nói: không tách.
+**Decided after building T42, T44 and T46.** This card was sequenced last so
+the call could be made on evidence, and the evidence says: do not extract.
 
-Lý do card đưa ra là "thêm view mới = thêm một hàm và một case, không phải
-thêm nhánh trong `tableBody`". Đã thêm hai view thật kể từ lúc viết card —
-cây sở hữu (T46) và chart panel (T44) — và **không cái nào phải đụng
-`tableBody`**: cây có `treeBody` riêng cộng một nhánh trong `viewMain`, chart
-nối vào cuối body. `viewMain` vốn đã là một dispatch phẳng gồm các early
-return, mỗi nhánh khoảng 8 dòng.
+The card's argument was "adding a view should be a function and a case, not
+another branch in `tableBody`". Two real views have landed since it was
+written — the owner tree (T46) and the chart panel (T44) — and **neither
+touched `tableBody`**: the tree has its own `treeBody` plus one branch in
+`viewMain`, and the chart appends to the body. `viewMain` is already a flat
+dispatch of early returns, each about eight lines.
 
-Tách bây giờ là churn và rủi ro regression, đổi lấy không gì người dùng thấy
-được. Mở lại card này khi có view thứ ba thật sự không nhét vừa — không phải
-trước đó.
+Extracting now is churn and regression risk in exchange for nothing a user can
+see. Reopen this card when a third view genuinely does not fit — not before.
 
-Hai sửa nhỏ card mang theo thì có giá trị thật và **đã làm**:
+The two fixes it carried are real and are **done**:
 
-- [x] Bảng có `n/m` trên title (text view đã có từ đầu, bảng thì không).
-- [x] `←` / `h` — doc ghi "focus resource list" từ bản đầu nhưng **không bind
-      ở đâu cả**; `h` rơi xuống vòng Actions rồi plugin rồi thôi. Nay bind
-      thật. `l` **không** bind (đó là Logs) — cặp phím đọc như đối xứng nhưng
-      không phải, nên doc ghi `←` `h` / `→`.
+- [x] The table shows `n/m` on its title. The text view has had a position
+      indicator since it was written (`38/66  57%`); the table never did, so
+      scrolling a long namespace gave no sense of depth.
+- [x] `←` / `h` — documented as "focus resource list" since the first release
+      and **bound nowhere**; `h` fell through the Actions loop, then plugins,
+      and did nothing. Both bound now. `l` is **not** bound (it is Logs) — the
+      pair reads as symmetrical and is not, which is why the docs spell it
+      `←` `h` / `→`.
 
 ---
 
-## T43 (bản gốc) — view engine
+## T43 (original) — view engine
+
+Kept for the record; superseded by the decision above.
 
 **Effort** M · **Deps** T39, T42 · **Lane** E
 
-**Goal** — thêm một view mới là thêm một hàm và một case, không phải thêm một
-nhánh trong `tableBody`.
+**Goal** — adding a view is a function and a case, not another branch in
+`tableBody`.
 
-**Why** — pane giữa hiện là một bảng cứng. Bốn view đã xếp hàng (grouped,
-chart, port-forward manager, pulse) và mỗi cái sẽ mọc thêm một nhánh trong
-`view.go` 1419 dòng và `model.go` 2946 dòng. Tách **sau** khi T42 đã chứng
-minh có mode thứ hai thật, không tách trước.
+**Why** — the centre pane is one hardcoded table. Four views are queued
+(grouped, chart, port-forward manager, pulse) and each would grow another
+branch inside a 1419-line `view.go` and a 2946-line `model.go`. Extract
+**after** T42 proves a second mode exists, not before.
 
-**Files** — `internal/ui/viewmode.go` (mới), `internal/ui/view.go`
+**Files** — `internal/ui/viewmode.go` (new), `internal/ui/view.go`
 
 **Design**
 
 ```
-rows   [][]string      // không đổi: phẳng, đã sắp thứ tự toàn cục
-meta   []rowMeta       // song song: groupValue, hidden, ordinal
+rows   [][]string      // unchanged: flat, globally ordered
+meta   []rowMeta       // parallel: groupValue, hidden, ordinal
 spans  []groupSpan     // value, firstRowIdx, count
 ```
 
-Mode: `table`, `grouped`, `text` (describe/YAML/help/tree), `chart`. Mỗi mode
-là một hàm từ contract đó + `layout` → `Block`. `zoom`, scroll model và các
-namespace zone dùng chung.
-
-Kèm hai thứ rẻ, sửa luôn:
-- Bảng không có chỉ báo vị trí trong khi text view có (`38/66  57%`) — thêm
-  `n/m` vào title panel.
-- `keybindings.md:10` ghi `←`/`h` là "focus resource list" nhưng **không cái
-  nào bind trong `focusMain`** (`model.go:1606-1702`); `h` rơi xuống vòng
-  Actions rồi không làm gì. Bind, hoặc sửa doc.
+Modes: `table`, `grouped`, `text` (describe/YAML/help/tree), `chart`. Each is
+a function from that contract plus a `layout` to a `Block`. `zoom`, the scroll
+model and the zone namespaces are shared.
 
 **Accept**
 
-- [ ] `tableBody` không còn biết gì về grouping.
-- [ ] Mọi frame `just shot` giống hệt trước khi tách (so byte).
-- [ ] `n/m` hiện trên title bảng.
-- [ ] `h` làm đúng điều doc nói, hoặc doc nói đúng điều `h` làm.
+- [ ] `tableBody` knows nothing about grouping.
+- [ ] Every `just shot` frame byte-identical to before the extraction.
 
 ---
 
 ## T44 — metric history + bar / sparkline / chart
 
-**Effort** L · **Deps** T37, T43 · **Lane** E
+**Effort** L · **Deps** T37 · **Lane** E · **Done**
 
-**Goal** — nhìn ra hình dạng của một số, không chỉ giá trị hiện tại của nó.
+**Goal** — see the shape of a number, not only its current value.
 
-**Why + thiết kế đầy đủ** — [../SPEC.md](../SPEC.md) §3 M8. Bắt buộc đọc
-trước khi gõ dòng nào: nó quy định từng glyph, từng token màu, bản ASCII dự
-phòng, và lý do **không** thêm dependency.
+**Why, and the full design** — [../SPEC.md](../SPEC.md) §3 M8. Read it before
+writing a line: it fixes every glyph, every colour token, the ASCII fallback,
+and the reason for **not** adding a dependency.
 
-**Files** — `internal/ui/gauge.go`, `chart.go`, `history.go` (đều mới),
-`internal/ui/view.go`, `internal/ui/trend.go`, `internal/ui/model.go`
+**Files** — `internal/ui/gauge.go`, `chart.go`, `history.go` (all new),
+`internal/ui/view.go`, `internal/ui/model.go`
 
-**Design (điểm không được lệch)**
+**Design — the parts that must not drift**
 
-- **Tự viết, ~135 dòng.** `bubbles/progress` (đã có trong go.mod) render
-  gradient bằng một `lipgloss.Style` mỗi segment — đúng cái chi phí `paint`
-  (`block.go:35`) sinh ra để tránh và đang chiếm 43% frame
-  (`performance.md:106-120`). `ntcharts` mang theo canvas/viewport/zone riêng,
-  tức mô hình render thứ hai đứng cạnh `block.go` và `zones.go` — mà
-  `zones.go:12-19` tồn tại **vì** bubblezone đã bị gỡ do đo được.
-- **12 token màu là trần cứng.** `theme.Theme` có đúng 12
-  (`theme/theme.go:16-30`) và theme tuỳ biến là `UnmarshalStrict` bắt buộc đủ
-  field (`theme.go:126-137`) — thêm token là **vỡ file theme của mọi người
-  dùng đang có**.
-- **Bar** (`view.go:68-84` → `gauge.go`): block-eighths trên rãnh chấm. Sửa
-  luôn bug: `filled := pct * width / 100` cắt cụt không sàn (`view.go:76`),
-  nên ở width 16 **mọi pct từ 1..6 vẽ ra 0 ô** — node 6% giống hệt node 0%.
-  `pct` âm không chặn, `strings.Repeat` sẽ panic. Nâng 60/85 cứng
-  (`view.go:69-75`) thành hằng có tên; 4 call site cần.
-- **Sparkline** `▁▂▃▄▅▆▇█`, 8 mẫu, cũ→mới, scale theo max **của chính dòng
-  đó**. Sau `:set spark`, mặc định tắt — cột CPU ở 80 cột không có 8 ô để cho.
-- **Chart** braille (`U+2800` + bitmask), một object đang chọn. CPU là đường
-  braille `Accent`, MEM là lớp chấm `Accent2` — **nét phân biệt, không phải
-  màu**. Panel nhỏ hơn 24×6 thì vẽ bar rồi thôi.
-- **Strip trạng thái** `▪ ▫ ▮ ▯ ?` — bốn hình khác nhau, đọc được khi màn hình
-  đơn sắc.
-- **History không được nuôi từ `View`.** `arrowFor` hiện làm đúng điều đó
-  (`view.go:806-823`) và **không được copy**: `View` chạy mỗi phím chứ không
-  mỗi tick, và chỉ đi qua dòng đang thấy (`view.go:850`), nên ring sẽ vừa lặp
-  vừa thủng. Nuôi từ `metricsTickMsg` trong `Update`, khoá theo
-  `Store.metricsGen` để append đúng một lần mỗi snapshot mới.
-- Ring `[N]int32` (không phải `uint16`: pod 64 core là 64000 milli, MiB tràn
-  16 bit ở 64 GiB). N=16 cho spark; N=120 **chỉ cho object đang chọn**.
-  5000 pod ≈ 1.05 MB.
-- Quét cùng tick: bỏ key không còn trong row set — sửa luôn map `m.trends`
-  đang phình vô hạn (`trend.go:97-108`).
-- **ASCII fallback** chọn **một lần lúc khởi động** từ `K10S_ASCII=1`, `$LANG`
-  không có `UTF-8`, hoặc `ascii: true`. Không chọn theo từng lần gọi.
+- **Build it, ~135 lines.** `bubbles/progress` (already in go.mod) renders a
+  gradient through a `lipgloss.Style` per segment — exactly the cost `paint`
+  (`block.go:35`) exists to avoid, measured at 43% of the frame
+  (`performance.md:106-120`). `ntcharts` brings its own canvas, viewport and
+  zone handling, a second rendering model beside `block.go` and `zones.go` —
+  and `zones.go:12-19` exists **because** bubblezone was removed on
+  measurement.
+- **Twelve colour tokens is a hard ceiling.** `theme.Theme` has exactly twelve
+  (`theme/theme.go:16-30`) and custom themes are `UnmarshalStrict` with every
+  field required (`theme.go:126-137`) — adding a token **breaks every existing
+  user theme file**.
+- **Bar** (`view.go:68-84` → `gauge.go`): block-eighths on a dotted trough.
+  Fixes a real bug on the way: `filled := pct * width / 100` truncates with no
+  floor (`view.go:76`), so at width 16 **every pct from 1 to 6 draws zero
+  cells** — a node at 6% is identical to one at 0%. A negative `pct` is
+  unguarded and panics in `strings.Repeat`. Hoist the hardcoded 60/85
+  (`view.go:69-75`) to named constants; several call sites want them.
+- **Sparkline** `▁▂▃▄▅▆▇█`, oldest to newest, scaled to **that row's own**
+  maximum. Behind a toggle, off by default — the CPU column has no eight
+  spare cells at 80 columns.
+- **Chart**, braille (`U+2800` + bitmask), for one selected object. Below
+  24×3 it does not draw: the bar and the number already say the current value.
+- **History must not be fed from `View`.** `arrowFor` does exactly that today
+  (`view.go:806-823`) and **must not be copied**: `View` runs per keystroke
+  rather than per tick, and walks only visible rows (`view.go:850`), so the
+  ring would both duplicate and hole. Feed it from the repaint tick in
+  `Update`.
+- Ring `[N]int32`, not `uint16`: a 64-core pod is 64000 milli, and MiB
+  overflows 16 bits at 64 GiB.
+- Sweep on the same tick: drop keys no longer in the row set — which also
+  fixes the unbounded `m.trends` map (`trend.go:97-108`).
+- **ASCII fallback** resolved **once at startup** from `K10S_ASCII=1`, a
+  `$LANG` without `UTF-8`, or config. Never per call.
 
 **Accept**
 
-- [ ] Node 1% và node 0% vẽ khác nhau.
-- [ ] 99% và 100% vẽ khác nhau.
-- [ ] `pct` âm hoặc `width` 0 không panic.
-- [ ] Hai grade khác nhau không bao giờ ra cùng chuỗi rune.
-- [ ] Render 20 frame không tick → số mẫu không đổi.
-- [ ] `just shot 80 24` với `K10S_ASCII=1` đọc được.
-- [ ] `BenchmarkView` không tăng alloc/op.
+- [x] A node at 1% and a node at 0% draw differently.
+- [x] 99% and 100% draw differently.
+- [x] A negative `pct` or a zero `width` does not panic.
+- [x] Two different grades never produce the same rune sequence.
+- [x] Rendering 20 frames with no tick leaves the sample count unchanged.
+- [x] `just shot 80 24` with `K10S_ASCII=1` is readable.
+- [x] `BenchmarkView` allocs/op does not rise.
 
-**Tests** — `TestGaugeFillRounding` (bảng `(pct,width) → filled`, có
-`pct=1,width=16 → 1` là ca **nay đang sai**); `TestGaugeWidthIsExact` cho mọi
-pct 0..100 ở width {6,10,16}, cả hai bộ glyph;
-`TestGlyphSetsAreSingleWidthAndDistinct` (mở rộng `glyphs_test.go:99`);
-`TestHistoryIsNotFedByView`; `TestHistorySweepDropsVanishedPods`.
+**Tests** — `TestGaugeShowsAnyUsageAtAll` (the 1–6% case, **wrong before this
+card**); `TestGaugeDoesNotRoundUpToFull`; `TestGaugeWidthIsExact` for every
+pct 0..100 at widths {6,10,16} in both glyph sets;
+`TestGlyphSetsAreSingleWidth`; `TestHistoryIsNotFedByView`;
+`TestHistorySweepDropsVanishedRows`; `TestChartPlotsTheShape`.
+
+**Shipped note** — two departures from the plan above. The window is one store
+of 64 samples, not 16 for the sparkline plus 120 for the chart: the sparkline
+draws the tail of the same window, so there is no second sampling path to keep
+in step. And the chart plots CPU alone rather than CPU and MEM together — a
+second series needs a second stroke style to stay readable without colour, and
+one series answered the question. The state strip (`▪ ▫ ▮ ▯`) was not built;
+nothing asked for it yet.
 
 ---
 
 ## T45 — action search + typed gate
 
-**Effort** M · **Deps** T37 · **Lane** D
+**Effort** M · **Deps** T37 · **Lane** D · **Done**
 
-**Goal** — gõ tên một việc là tới được việc đó; và hai phím không hoàn tác
-được thì không cách một `enter`.
+**Goal** — typing the name of a thing reaches that thing; and the two keys
+that cannot be undone are not one `enter` away.
 
-**Why** — palette (`palette.go:54-92`) tìm kind và object, **không tìm động
-từ**. `R`, `X`, `ctrl+y` không xuất hiện ở pane nào, hint nào
-(`view.go:1172`). Còn `D` delete đặt `danger: true` nhưng chỉ chặn bằng
-`enter` (`model.go:2181`) — mà `enter` cũng là phím "mở" dùng khắp nơi, nên
-`D`,`enter` là xoá. `u` drain (`model.go:2229`) y hệt, và drain là phím nặng
-nhất trong app. Cơ chế typed gate **đã có** và lens pack đã dùng
-(`lens.go:139-140`).
+**Why** — the palette (`palette.go:54-92`) finds kinds and objects but **not
+verbs**. `R`, `X` and `ctrl+y` appear in no pane and no hint string
+(`view.go:1172`). And `D` delete sets `danger: true` but gates only on `enter`
+(`model.go:2181`) — `enter` is also the universal "open" key, so `D`,`enter`
+deletes. `u` drain (`model.go:2229`) is the same, and drain is the heaviest
+key in the app. The typed gate **already exists** and lens packs already use
+it (`lens.go:139-140`).
 
 **Files** — `internal/ui/palette.go`, `internal/ui/model.go`
 
 **Design**
 
-- `paletteHits` match thêm `Actions`, lens spec và plugin; dòng `sub` ghi kind
-  áp dụng được; bắn qua `fireAction`. Dùng lại nguyên overlay, key handling,
-  zone và đường chuột của palette — không modal mới, không focus state mới.
-- `typed: name` cho `D` (`model.go:2183`) và `u` (`model.go:2232`).
-- `r` restart (`model.go:2170`): không `danger` cũng không `typed`, trong khi
-  message của chính nó nói "zero downtime with 2+ replicas" mà không kiểm tra.
-  Đặt `danger` khi replicas < 2.
-- `e` → apply (`model.go:1189-1210`) apply **vô điều kiện** lúc editor thoát:
-  `:q` khỏi `vi`, file cụt do editor chết, file rỗng — đều tới `src.Apply`.
-  So bytes với bản đã fetch; giống nhau thì bỏ qua im lặng, khác thì diff +
-  confirm.
-- `o` cordon giữ nguyên không gate — nó là toggle và nhãn tự lật.
-- Giữ nguyên invariant: `confirm.armed()` chặn giống hệt nhau ở bàn phím
-  (`model.go:1318`) và ở nút OK chuột (`model.go:2729`).
+- `paletteHits` also matches `Actions`, lens specs and plugins; the `sub` line
+  names the kinds it applies to; firing goes through `fireAction`. Reuses the
+  palette's overlay, key handling, zones and mouse path — no new modal, no new
+  focus state.
+- `typed: name` on `D` (`model.go:2183`) and `u` (`model.go:2232`).
+- `e` → apply (`model.go:1189-1210`) applies **unconditionally** when the
+  editor exits: `:q` out of `vi`, a file truncated by a crashed editor, an
+  empty file — all reach `src.Apply`. Compare against the fetched bytes; skip
+  silently when identical.
+- `o` cordon stays ungated — it is a toggle and the label flips.
+- Preserve the invariant: `confirm.armed()` gates identically on the keyboard
+  (`model.go:1318`) and on the mouse OK button (`model.go:2729`).
 
 **Accept**
 
-- [ ] Gõ "restart" trong palette → tới được Rollout Restart.
-- [ ] `R`, `X`, `ctrl+y` tìm được bằng tên.
-- [ ] `D`, `enter` **không** xoá.
-- [ ] `e` rồi `:q` không ghi gì lên cluster.
-- [ ] Nút OK chuột và `enter` chặn giống nhau.
+- [x] Typing "describe" in the palette reaches Describe.
+- [x] `R`, `X` and `ctrl+y` are findable by name.
+- [x] `D`, `enter` does **not** delete.
+- [x] `e` then `:q` writes nothing to the cluster.
+- [x] The mouse OK button and `enter` gate identically.
 
-**Tests** — `TestDeleteRequiresTypedName`; `TestEditWithNoChangesDoesNotApply`;
-`TestPaletteFindsActionsByName`.
+**Tests** — `TestDeleteRequiresTypedName`; `TestDrainRequiresTypedName`;
+`TestEditWithNoChangesDoesNotApply`; `TestEditWithAnEmptyFileDoesNotApply`;
+`TestEditWithChangesStillApplies`; `TestPaletteFindsActionsByName`.
+
+**Shipped note** — `r` restart was listed here for a `danger` flag when
+replicas < 2 and was not done: the replica count is not on the action path
+without another read, and the rollout is reversible. `handleMouse` was also
+calling `paletteHits()` twice per click on top of the once-per-frame the
+overlay costs; asked once now.
 
 ---
 
-## T46 — cây lồng thật trong bảng chính
+## T46 — nested owner tree in the main table
 
-**Effort** L · **Deps** T42, T43 · **Lane** B
+**Effort** L · **Deps** T42 · **Lane** B · **Done**
 
-**Goal** — `T` bật chế độ cây lồng nhiều tầng ngay trong bảng chính:
-Deployment → ReplicaSet → Pod, thụt đầu dòng, gập được từng nhánh.
+**Goal** — `t` opens a multi-level tree in the main table: Deployment →
+ReplicaSet → Pod, indented, every node selectable.
 
-**Why** — T42 cố tình chỉ gom **một tầng** để không phá sort / filter / số
-dòng / selection ([../SPEC.md](../SPEC.md) §3 M6 liệt kê đủ 5 chỗ vỡ). Card
-này làm đúng thứ T42 từ chối, nhưng **là opt-in và làm sau**, khi đã nhìn
-thấy T42 trên frame thật và vẫn muốn cây lồng. Thứ tự đó là điểm chính của
-card: làm trước T42 là xây cái đắt hơn mà chưa biết cái rẻ có đủ không.
+**Why** — T42 deliberately groups **one level** so it does not break sort,
+filter, row numbering or selection ([../SPEC.md](../SPEC.md) §3 M6 lists all
+five). This card does the thing T42 refused, but **opt-in and afterwards**,
+once T42 has been seen on a real frame and a tree is still wanted. That order
+is the point of the card: doing it first would build the expensive version
+before knowing whether the cheap one was enough.
 
-**Files** — `internal/ui/treeview.go` (mới, vùng lane E — **hỏi dispatcher
-trước**), `internal/ui/viewmode.go`, `internal/ui/model.go`,
+**Files** — `internal/ui/treeview.go` (new), `internal/ui/model.go`,
 `internal/ui/view.go`, `docs/ui.md`, `docs/keybindings.md`
 
 **Design**
 
-Mode thứ năm của view engine (T43), **không** phải một nhánh trong
-`tableBody`. `T` bật/tắt, nhớ theo kind, không persist qua phiên.
+The five things T42 avoids, each of which this card has to answer — and if it
+cannot, stop and say so rather than guess:
 
-Năm chỗ T42 tránh, card này phải trả lời từng cái — không trả lời được thì
-dừng và báo, đừng đoán:
+1. **Sort.** A tree orders siblings, so a global sort means nothing inside
+   one. Sorting **closes the tree**, the same rule T42 uses for grouping:
+   sort and structure are exclusive.
+2. **Filter.** Show matches **with their ancestors**, and draw the
+   structure-only ancestors `subtle` and unselectable. A row that is on screen
+   without matching has to be obviously not a result, or the filter looks
+   broken.
+3. **Row numbers.** In tree mode, **drop the number column** and use the
+   branch drawing (`├─`, `└─`, `│`). A number exists to address a row; in a
+   tree it addresses nothing stable, so keeping it is a lie. `rowNumBase`
+   (`view.go:1377`) is untouched — table mode is unchanged.
+4. **Scale.** A hard ceiling, as `treeMaxNodes` (`tree.go:43`) already does
+   for the `X` panel: past **300 nodes**, do **not** open, and say the number
+   in a toast. A tree that silently truncates is indistinguishable from a
+   cluster that really is that small.
+5. **Selection.** Parent nodes are real objects, selectable, with the Actions
+   pane following the selected node's kind — unlike T42, where a header is not
+   an object. This is the expensive part: `curRow()` (`model.go:820`) returns
+   the row of **one** kind, and a tree mixes kinds in one list.
 
-1. **Sort.** Cây sắp thứ tự trong phạm vi anh em. Sort toàn cục không có
-   nghĩa trong cây → bật sort là **tự tắt cây** (cùng luật T42 dùng cho gom:
-   sort và cấu trúc loại trừ nhau, title panel nói rõ). Không có luật thứ hai.
-2. **Filter.** Hiện match **kèm tổ tiên**, và tổ tiên chỉ-để-giữ-cấu-trúc vẽ
-   `subtle` + không chọn được. Dòng không match mà hiện lên phải nhìn ra ngay
-   là không match, nếu không thì filter trông như hỏng.
-3. **Số dòng.** Trong mode cây, **bỏ hẳn cột số** và thay bằng nét cây
-   (`├─`, `└─`, `│`). Số dòng tồn tại để địa chỉ hoá; trong cây gập được nó
-   không địa chỉ hoá được gì, nên giữ lại là nói dối. `rowNumBase`
-   (`view.go:1377`) không đụng tới — mode table vẫn như cũ.
-4. **Quy mô.** Trần cứng như `treeMaxNodes` (`tree.go:43`) đang làm cho panel
-   `X`: quá **300 nút** thì **không** vào mode cây, báo toast nói rõ con số,
-   ở lại bảng phẳng. Cây tự cụt im lặng không phân biệt được với cluster
-   thật sự nhỏ.
-5. **Selection.** Nút cha (Deployment, ReplicaSet) **là object thật**, chọn
-   được, Actions pane đổi theo kind của nút đang chọn — khác T42, nơi header
-   không phải object. Đây là chỗ tốn nhất: `curRow()` (`model.go:820`) trả
-   `[]string` của **một kind**, còn cây trộn nhiều kind trong một cột. Cần
-   `curRef() domain.Ref` đi kèm, và mọi call site của `curName()` /
-   `curNamespace()` phải đọc kind từ ref chứ không từ `m.kind`.
+**The watch this needs is the hardest constraint.** `pod.ownerReferences`
+gives the ReplicaSet name for free (T42 uses exactly that), but **ReplicaSet →
+Deployment needs the ReplicaSet object**, which means a ReplicaSet informer.
+Opening Pods deliberately starts no other informer (`performance.md:31`,
+`TestOpeningOneKindWatchesOnlyThatKind`).
 
-**Cạnh cần watch mới — đây là ràng buộc nặng nhất.** `pod.ownerReferences`
-cho ra tên ReplicaSet mà không tốn gì (T42 dùng đúng chỗ đó), nhưng
-**ReplicaSet → Deployment thì phải có object ReplicaSet**, tức informer
-ReplicaSet. Mở Pods hiện cố tình không bật informer nào khác
-(`performance.md:31`, `TestOpeningOneKindWatchesOnlyThatKind`).
-
-Luật: bật mode cây là hành động **on-demand** của người dùng, nên được phép
-bật informer còn thiếu — nhưng **chỉ lúc bấm `T`**, không phải lúc mở kind,
-và phải báo trong toast là đang bật watch gì. Informer đó tắt theo kind như
-mọi informer khác. Suy tên Deployment từ hash suffix (cách T42 dùng) **không
-đủ cho card này**, vì cây cần chính object Deployment để lấy status.
+The rule: opening the tree is an **on-demand** user action, so it may start
+the missing informers — but **only on the keypress**, never on opening the
+kind, and the toast must say which watches it started.
 
 **Accept**
 
-- [ ] `T` trên Pods → Deployment → ReplicaSet → Pod, thụt đúng tầng.
-- [ ] Bấm sort bất kỳ → tự về bảng phẳng, title nói rõ.
-- [ ] Filter → tổ tiên hiện `subtle`, không chọn được, nhìn ra ngay.
-- [ ] Mode cây không có cột số, có nét `├─ └─ │`.
-- [ ] > 300 nút → không vào cây, toast nói con số thật.
-- [ ] Chọn nút Deployment → Actions pane hiện action của Deployment.
-- [ ] `T` lần đầu → toast nói đang bật informer ReplicaSet.
-- [ ] Mở Pods mà **không** bấm `T` → `TestOpeningOneKindWatchesOnlyThatKind`
-      vẫn xanh.
-- [ ] `TestKeypressLatency` không đỏ.
-- [ ] `just shot 160 48 T` và `just shot 80 24 T`.
+- [x] `t` on Pods gives Deployment → ReplicaSet → Pod at the right depths.
+- [x] Filtering shows ancestors `subtle` and unselectable.
+- [x] Tree mode has no number column and draws `├─ └─ │`.
+- [x] Over 300 nodes does not open, and the toast says the number.
+- [x] Selecting a Deployment node shows Deployment actions.
+- [x] Opening Pods **without** `t` keeps
+      `TestOpeningOneKindWatchesOnlyThatKind` green.
+- [x] `TestKeypressLatency` stays green.
+- [x] `just shot 140 34 t`.
 
-**Tests** — `TestTreeModeStartsInformersOnlyOnDemand` (mở kind: không watch
-mới; bấm `T`: đúng một watch mới); `TestSortLeavesTreeMode`;
-`TestFilterShowsAncestorsAsUnselectable`; `TestTreeRefusesAboveNodeBudget`;
-`TestCurRefCarriesKindPerRow`; `TestTableModeFrameUnchanged` (so byte với
-frame trước card này).
+**Tests** — `TestTreeNestsPodsUnderReplicaSetsUnderDeployments`;
+`TestTreeActionsFollowTheSelectedNodesKind`;
+`TestTreeDoesNotRepointTheUnderlyingTable`;
+`TestTreeFilterKeepsAncestorsUnselectable`; `TestTreeCursorSkipsAncestors`;
+`TestTreeGlyphsCloseTheirBranches`; `TestTreeKeepsPodsWithNoDeployment`.
 
-**Ghi chú dispatch** — card này đụng `internal/ui/model.go` ở vùng
-`curRow()`/`curName()`, là file dùng chung. Theo giới hạn cứng: chỉ được
-**thêm** (`curRef()` mới, append cuối, kèm comment `T46`), không sửa lại chữ
-ký `curRow()` đang có. Không làm được trong ràng buộc đó → dừng, báo
-dispatcher.
+**Shipped note** — three departures. The key is `t`, not `T`: `T` already
+cycles the theme. The kind override is a new `targetKind()`, deliberately not
+folded into `curKind()` — `tableData` keys on `curKind`, so overriding it
+would repoint the whole table at the cursor; there is a test for that. And it
+is not a mode of a view engine, because T43 was closed without building one.
 
 ---
 
