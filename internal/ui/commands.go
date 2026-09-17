@@ -78,6 +78,7 @@ var appCommands = []SlashCommand{
 	{Name: ":search", Args: "<term>", Desc: "filter the resource list (left pane)"},
 	{Name: ":scale", Args: "<n>", Desc: "scale the selected workload to n replicas"},
 	{Name: ":filter", Args: "<term>", Desc: "filter rows of the current table"},
+	{Name: ":group", Args: "<key>", Desc: "group rows: owner, node, namespace, status (blank turns it off)"},
 	{Name: ":ctx", Full: ":context", Args: "[name]", Desc: "kube contexts — a name switches straight to it",
 		Alt: []string{":context", ":contexts"}, OptArgs: true},
 	{Name: ":aliases", Desc: "every :name that opens a resource view", Alt: []string{":alias"}},

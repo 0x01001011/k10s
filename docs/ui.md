@@ -42,6 +42,51 @@ label.
 Neither side pane spends rows on a permanent search box — see *Search boxes*
 below.
 
+## Row groups
+
+Pods open grouped under their owner, Events under their object; every other
+kind is flat. A header names the Deployment and the ReplicaSet it was derived
+from (`▾ web-frontend · rs 6b8c7d9f5 … 3`) and carries the count of rows
+beneath it.
+
+The owner costs nothing to know: `ownerReferences` is already on the pod, and
+the Deployment name is recovered from the ReplicaSet's pod-template-hash
+suffix rather than looked up — so opening Pods still starts exactly one watch.
+Where a name does not have that shape (a StatefulSet member, a bare pod) the
+owner name is printed as-is; a Deployment name is never guessed.
+
+This is **one level of headers over a flat row slice**, not a tree. Row
+numbers stay continuous and count objects, so folding a group does not
+renumber the rows below it; selection stays an index into the same flat slice,
+so `curRow`, the Actions pane and every action are untouched; and headers are
+never selectable. The nested tree is a separate, opt-in view (plan card T46);
+the multi-hop relationship tree is already `X`.
+
+| | |
+|---|---|
+| `space` | fold / unfold the group under the cursor |
+| click a `▾`/`▸` header | either |
+| `:group <key>` | `owner`, `node`, `namespace`, `status`, `object`; bare `:group` turns it off |
+
+Rules, all shared with the sidebar's own folding:
+
+- **A search ignores folding entirely.** Every match renders wherever it is —
+  a match hidden behind a fold would make the filter look broken.
+- A folded group holding the cursor keeps its marker, so "where am I" never
+  becomes a guess. Arrow keys skip folded rows.
+- **Sorting and grouping are exclusive.** Sorting states the whole table's
+  order and grouping states its shape; honouring both would sort within
+  groups, which answers neither question. A sort drops the table to flat.
+- Grouping falls back to flat, silently, when the kind has no such column,
+  when there are fewer than two distinct values, above 40 groups, or above
+  2000 rows.
+
+The group key persists per kind (`group:` in [config.md](config.md)). Which
+groups are folded does **not** — unlike a folded sidebar group, which stops
+that kind being counted, a folded row group saves nothing, so restoring a
+session with half the pods hidden would be a surprise rather than a
+preference.
+
 ## Top banner (borderless)
 
 Row 1: `⎈ k10s │ context │ ver │ nodes 2/3 ready … ns <name> ▾ │ theme <name> ⟳`

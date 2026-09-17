@@ -278,6 +278,14 @@ type Model struct {
 	// cross-restart persistence.
 	sorts map[string]sortState
 
+	// groups is the row group-by key per kind, persisted as one flat line.
+	// collapsedRows is which groups are folded, and is NOT persisted: a
+	// folded row-group saves no requests (unlike a folded sidebar group,
+	// which stops that kind being counted), so reopening a session with half
+	// the pods hidden would be a surprise rather than a preference.
+	groups        map[string]groupKey
+	collapsedRows map[string]map[string]bool
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -448,6 +456,7 @@ func (m *Model) loadConfig() {
 		m.collapsed = defaultCollapsed()
 	}
 	m.zoomed = c.Zoomed
+	m.groups = parseGroupConfig(c.Group)
 	m.applyUpdateConfig(c.Update)
 	m.onboarded = c.Onboarded
 	// First run opens straight into the cluster. A settings dialog in front
@@ -484,6 +493,7 @@ func (m *Model) saveConfig() error {
 		Collapsed:    m.collapsedGroups(),
 		CollapsedSet: true,
 		Zoomed:       m.zoomed,
+		Group:        renderGroupConfig(m.groups),
 		AI: config.AI{
 			Provider: providers[m.cfg.provider],
 			BaseURL:  m.cfg.url,
@@ -1734,6 +1744,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		// have. R answers "what is next to this"; X answers "what is the
 		// shape, and where in it is the failure".
 		return m.showTree()
+	case " ", "space":
+		// The sidebar's fold key, for rows. It stays a search character
+		// while searching, which is why this sits behind the mode check.
+		if m.mode == modeTable && m.rowSearch == "" {
+			cols, rows := m.tableData()
+			if spans := m.groupSpans(cols, rows); len(spans) > 0 {
+				m.toggleRowGroup(spans, m.rowIdx)
+			}
+		}
 	case "<", ">":
 		// Walk the sort column. `s` is Shell and `ctrl+s` is mouse capture,
 		// and shift+digit is unreliable — terminals send !@#$%^&*( for it,
@@ -2158,8 +2177,11 @@ func (m *Model) move(delta int) {
 			m.textTop = clamp(m.textTop+delta, 0, maxi(0, len(m.textLines)-(m.layout().midH-2)))
 			return
 		}
-		_, rows := m.tableData()
+		cols, rows := m.tableData()
 		m.rowIdx = clamp(m.rowIdx+delta, 0, maxi(0, len(rows)-1))
+		// Arrow keys walk only what is on screen, and never open a group you
+		// folded — the sidebar's rule, for rows.
+		m.rowIdx = m.skipCollapsed(cols, rows, m.rowIdx, delta)
 		m.rowMem[m.curKind().Key] = m.rowIdx
 		m.anchorRow()
 		m.syncScroll()
@@ -2623,6 +2645,29 @@ func (m *Model) runSlash(cmd string) tea.Cmd {
 		} else {
 			m.toast = "row filter: " + arg
 		}
+		return nil
+	case ":group":
+		kind := m.curKind().Key
+		m.focus = focusMain
+		m.input.Blur()
+		if arg == "" {
+			m.setGroup(kind, groupNone)
+			m.toast = "grouping off"
+			return nil
+		}
+		g := groupKey(arg)
+		if !slices.Contains(groupKeys, g) {
+			m.toast = "unknown group: " + arg + " — try owner, node, namespace, status"
+			return nil
+		}
+		m.setGroup(kind, g)
+		// Say plainly when the key is right but this kind cannot answer it,
+		// rather than leaving a flat table and no explanation.
+		if gcols, _ := m.tableData(); groupColumn(gcols, m.curKind(), g, m.namespace) < 0 {
+			m.toast = arg + " is not something " + m.res().Name + " can group by here"
+			return nil
+		}
+		m.toast = "group → " + arg
 		return nil
 	case "/demo":
 		m.closePrompt()

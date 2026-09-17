@@ -370,9 +370,18 @@ func (s *Store) podRows(ns string) []nsRow {
 		if node == "" {
 			node = "<none>"
 		}
+		// The owner is a meta cell, not a column: it is read by grouping and
+		// drawn by nobody. ownerReferences is already on the pod, so this
+		// costs no request and starts no watch — see domain.OwnerLabel for
+		// why the ReplicaSet name is enough to name the Deployment.
+		owner := ""
+		if len(p.OwnerReferences) > 0 {
+			owner = p.OwnerReferences[0].Name
+		}
 		row := []string{
 			p.Name, fmt.Sprintf("%d/%d", ready, total), podStatus(p), strconv.Itoa(int(restarts)),
 			cpu, mem, node, age(p.CreationTimestamp.Time),
+			owner,
 		}
 		out = append(out, nsRow{p.Namespace, row})
 	}

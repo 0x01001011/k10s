@@ -16,7 +16,9 @@ var rsActions = []string{domain.ADescribe, domain.AYAML, domain.ALogs, domain.AS
 // identically against either backend.
 var builtinKinds = []domain.Kind{
 	{Key: "pods", Name: "Pods", Short: "po", Group: "Workloads", Namespaced: true,
-		Cols: []string{"NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "NODE", "AGE"}, Allowed: podActions},
+		Cols: []string{"NAME", "READY", "STATUS", "RESTARTS", "CPU", "MEM", "NODE", "AGE"}, Allowed: podActions,
+		// T42: read by grouping, drawn by nobody. See domain.Kind.Meta.
+		Meta: []string{"OWNER"}},
 	{Key: "deployments", Name: "Deployments", Short: "deploy", Group: "Workloads", Namespaced: true,
 		Cols: []string{"NAME", "READY", "UP-TO-DATE", "AVAILABLE", "IMAGE", "AGE"}, Allowed: wlActions},
 	{Key: "replicasets", Name: "ReplicaSets", Short: "rs", Group: "Workloads", Namespaced: true,

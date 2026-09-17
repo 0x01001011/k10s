@@ -12,15 +12,6 @@ import (
 	"github.com/0x01001011/k10s/internal/mock"
 )
 
-func colIndex(cols []string, want string) int {
-	for i, c := range cols {
-		if c == want {
-			return i
-		}
-	}
-	return -1
-}
-
 // TestSortDoesNotMutateBackendRows is the bug the copy prevents: on the
 // unfiltered path tableData returns the backend's own slice, and sorting in
 // place would reorder informer-derived state that Rows() hands out again.

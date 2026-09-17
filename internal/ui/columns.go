@@ -71,6 +71,18 @@ func colPriority(header string) int {
 	}
 }
 
+// colIndex finds a column by header name, or -1. Looked up by name and not
+// by a fixed offset because :ns all prepends a NAMESPACE column that shifts
+// every other column right.
+func colIndex(cols []string, want string) int {
+	for i, c := range cols {
+		if c == want {
+			return i
+		}
+	}
+	return -1
+}
+
 // dropIndex picks the position in keep whose column should leave the screen
 // first: lowest priority, and on a tie the rightmost of those, so columns the
 // policy has no opinion about still go right to left as they always did.

@@ -1058,9 +1058,31 @@ func (m *Model) tableBody(inner, rows int) []string {
 		visible = 1
 	}
 	m.rowScroll = clamp(m.rowScroll, 0, maxi(0, len(allRows)-visible))
-	end := clamp(m.rowScroll+visible, 0, len(allRows))
 
-	for i := m.rowScroll; i < end; i++ {
+	// Group headers and folded rows both change how many table rows one
+	// screen row buys, so the window is filled by budget rather than by a
+	// fixed end index. Without grouping this is the old loop exactly.
+	spans := m.groupSpans(cols, allRows)
+	gkey := m.groupFor(m.curKind().Key)
+	end := clamp(m.rowScroll+visible, 0, len(allRows))
+	if len(spans) > 0 {
+		end = len(allRows)
+	}
+
+	for i := m.rowScroll; i < end && len(out)-2 < visible; i++ {
+		if s, ok := spanAt(spans, i); ok && i == s.first {
+			folded := m.collapsedRows[m.groupStateKey()][s.value]
+			holds := m.rowIdx >= s.first && m.rowIdx < s.first+s.count
+			out = append(out, m.mark(fmt.Sprintf("rgrp:%d", s.first),
+				padBG(m.rowGroupHeader(gkey, s, folded, holds && folded, inner), inner, th.Bg)))
+			if len(out)-2 >= visible {
+				break
+			}
+		}
+		if m.rowCollapsed(spans, i) {
+			continue
+		}
+
 		row := allRows[i]
 		sel := i == m.rowIdx
 		bg := th.Bg
