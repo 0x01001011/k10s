@@ -131,6 +131,35 @@ one kind.
 into the read-only text panel. `t` is built-in ownership, in the table, with a
 cursor.
 
+## Meters, sparklines and the chart
+
+Every meter follows one rule: **length or height carries the magnitude, colour
+only grades it, and a glyph always repeats the grade.** Red against green is
+the worst pair for deuteranopia, so nothing is colour-only.
+
+The cluster gauges are block-eighths on a dotted trough, with a leading grade
+mark (`·` ok, `!` warn, `×` err) and ticks at the 60% and 85% thresholds:
+
+```
+ CPU  ·██████···┊···┊··  38%    18.4/48 cores
+```
+
+`:spark` adds an eight-sample CPU sparkline to the table, and `:chart` plots
+the same window as a braille chart under it — 2×4 dots per cell, so a 60×8
+panel carries 120 points over 32 steps. Both read one store, sampled on the
+repaint tick and never from the render path: `View` runs per keystroke and
+only over visible rows, so a series fed from there would append duplicates
+while you typed, nothing while you idled, and miss every row scrolled past.
+
+The window is 64 samples — about sixteen minutes at the backend's 15s metrics
+refresh. A sentinel reading is skipped rather than stored as zero: a pending
+pod has no CPU, which is not the same as a dip. An empty window says it is
+still sampling rather than drawing an empty box.
+
+`K10S_ASCII=1`, or a locale that has not said it speaks UTF-8, switches every
+glyph above to an ASCII ladder — chosen once at startup, because a frame that
+mixes the two sets is worse than a plain one.
+
 ## Top banner (borderless)
 
 Row 1: `⎈ k10s │ context │ ver │ nodes 2/3 ready … ns <name> ▾ │ theme <name> ⟳`

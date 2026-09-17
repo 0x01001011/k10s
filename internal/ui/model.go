@@ -292,6 +292,9 @@ type Model struct {
 	// not have to spare. `:set spark` turns it on.
 	hist  map[string]*ring
 	spark bool
+	// chart shows the selected object's window as a braille plot under the
+	// table. It reads the same store the sparkline does.
+	chart bool
 
 	// tree is the nested owner view (T46) when it is open, and treeIdx the
 	// cursor into it. Not persisted: it starts two informers, so it is a
@@ -2733,6 +2736,21 @@ func (m *Model) runSlash(cmd string) tea.Cmd {
 			m.toast = "row filter cleared"
 		} else {
 			m.toast = "row filter: " + arg
+		}
+		return nil
+	case ":chart":
+		m.focus = focusMain
+		m.input.Blur()
+		m.chart = !m.chart
+		if m.chart {
+			// The chart plots the same window the sparkline samples, so
+			// turning it on turns sampling on: there is one store, and
+			// nothing feeds it unless something is reading it.
+			m.spark = true
+			m.observeMetrics()
+			m.toast = "chart on · the shape fills in over the next few refreshes"
+		} else {
+			m.toast = "chart off"
 		}
 		return nil
 	case ":spark":

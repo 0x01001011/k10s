@@ -80,6 +80,7 @@ var appCommands = []SlashCommand{
 	{Name: ":filter", Args: "<term>", Desc: "filter rows of the current table"},
 	{Name: ":group", Args: "<key>", Desc: "group rows: owner, node, namespace, status (blank turns it off)"},
 	{Name: ":spark", Desc: "toggle the inline CPU sparkline"},
+	{Name: ":chart", Desc: "toggle a CPU chart for the selected object"},
 	{Name: ":ctx", Full: ":context", Args: "[name]", Desc: "kube contexts — a name switches straight to it",
 		Alt: []string{":context", ":contexts"}, OptArgs: true},
 	{Name: ":aliases", Desc: "every :name that opens a resource view", Alt: []string{":alias"}},

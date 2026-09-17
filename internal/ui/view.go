@@ -840,12 +840,26 @@ func (m *Model) viewMain(w, h int) Block {
 	if searching {
 		bodyH -= 2
 	}
+	// The chart takes rows from the table rather than overlaying it: a plot
+	// you cannot see the rows behind answers a different question than the
+	// one that was asked.
+	chartH := 0
+	if m.chart {
+		chartH = clamp(bodyH/3, 0, 10)
+		if chartH < 4 {
+			chartH = 0 // below four rows there is no shape left to read
+		}
+	}
+	bodyH -= chartH
 	if bodyH < 1 {
 		bodyH = 1
 	}
 	body := m.tableBody(inner, bodyH)
 	for len(body) < bodyH {
 		body = append(body, "")
+	}
+	if chartH > 0 {
+		body = append(body, m.chartLines(inner, chartH)...)
 	}
 	if searching {
 		body = append(body, lipgloss.NewStyle().Background(th.Bg).Foreground(th.Border).Render(strings.Repeat("╌", inner)))
@@ -1155,7 +1169,7 @@ func (m *Model) tableBody(inner, rows int) []string {
 				// sample sits next to the number it explains.
 				var sp string
 				if m.spark && nameIdx >= 0 && nameIdx < len(row) {
-					if s := m.rowSamples(m.curKind().Key, m.rowNamespace(row, cols), row[nameIdx]); len(s) > 1 {
+					if s := m.rowSpark(m.curKind().Key, m.rowNamespace(row, cols), row[nameIdx]); len(s) > 1 {
 						sp = spark(th, s, cellLevel("", v))
 					}
 				}

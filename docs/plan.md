@@ -170,7 +170,7 @@ chứng minh được là không làm chậm frame.
 - [x] **T41** honest columns — bỏ `-` đa nghĩa
 - [x] **T42** row groups — gom theo owner, mặc định bật cho Pods
 - [ ] **T43** view engine — tách mode switch khỏi `tableBody`
-- [~] **T44** metric history + bar + sparkline — **còn lại**: chart panel braille
+- [x] **T44** metric history + bar + sparkline + chart panel braille (`:chart`)
 - [x] **T45** action search trong palette + typed gate cho Delete/Drain
 - [x] **T46** cây lồng thật trong bảng chính (opt-in, phím `t` — `T` đã là theme)
 

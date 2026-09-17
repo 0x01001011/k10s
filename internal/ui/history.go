@@ -19,13 +19,22 @@ import (
 // So: fed from the repaint tick in Update, over the whole current row set, and
 // swept on the same tick.
 
-// histLen is how many samples one row keeps.
+// histLen is how many samples one row keeps; sparkLen is how many of them the
+// inline sparkline draws.
 //
-// Sixteen, because that is what a table cell can spare and because the live
-// backend refreshes metrics every 15s — sixteen samples is four minutes, the
-// honest window for that sampler. More would manufacture resolution the data
-// does not have.
-const histLen = 16
+// The window is sized by the chart, which wants a shape rather than a glance:
+// 64 samples against the live backend's 15s metrics refresh is sixteen
+// minutes. The sparkline takes the most recent eight of that same window,
+// because eight is what a table cell can spare — one store rather than two,
+// and no second sampling path to keep in step with the first.
+//
+// Cost at 5000 pods: 64 × 4 B plus the map bucket and key, roughly 350 B a
+// row, so about 1.75 MB. More would manufacture resolution the sampler does
+// not have.
+const (
+	histLen  = 64
+	sparkLen = 8
+)
 
 // ring is a fixed-size sample window.
 //
@@ -141,11 +150,20 @@ func lipglossWidthOf(s string) int {
 	return lipgloss.Width(s)
 }
 
-// rowSamples is the window for one row, or nil.
+// rowSamples is the whole window for one row, or nil.
 func (m *Model) rowSamples(kind, ns, name string) []int32 {
 	r := m.hist[histKey(kind, ns, name)]
 	if r == nil {
 		return nil
 	}
 	return r.samples()
+}
+
+// rowSpark is the tail of that window — what fits in a table cell.
+func (m *Model) rowSpark(kind, ns, name string) []int32 {
+	s := m.rowSamples(kind, ns, name)
+	if len(s) > sparkLen {
+		return s[len(s)-sparkLen:]
+	}
+	return s
 }
