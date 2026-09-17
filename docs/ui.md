@@ -87,6 +87,50 @@ that kind being counted, a folded row group saves nothing, so restoring a
 session with half the pods hidden would be a surprise rather than a
 preference.
 
+## The owner tree (`t`)
+
+Grouping is one level over a flat list. `t` opens the other thing: a real
+Deployment → ReplicaSet → Pod tree where every node is an object.
+
+```
+▌deploy/api-gateway  2/2
+ └─ rs/api-gateway-7d9f4c8b6d  2
+    ├─ po/api-gateway-7d9f4c8b6d-2xk4p  + Running
+    └─ po/api-gateway-7d9f4c8b6d-hv8qz  + Running
+ deploy/billing-worker  ! 0/1
+ └─ rs/billing-worker-6f8d9c5b7  0
+    └─ po/billing-worker-6f8d9c5b7-qq91x  x CrashLoopBackOff
+```
+
+Each row carries its kind, because three kinds share one list and indentation
+alone does not say which is which. **Actions follow the node under the cursor**
+— `d` on a Deployment describes the Deployment, `l` on a pod reads its logs —
+and the Actions pane lists what that node can do. The sidebar's kind still
+drives the table underneath, so closing the tree puts you back where you were.
+
+It is opt-in, and second on purpose. Most of what people want from "show me
+the tree" is answered by grouping; the part that is not is the part that
+costs. A tree needs the ReplicaSet and Deployment **objects**, which means
+informers that opening Pods deliberately does not start — so `t` starts them,
+on the keypress, and says so in the toast. Opening Pods still watches exactly
+one kind.
+
+- **A filter keeps the ancestors of every match**, dimmed and unselectable.
+  Dropping them would lie about the shape; offering them as results would lie
+  about what matched. That fork is the cost of a tree, and is why the flat
+  list stays the default.
+- **Row numbers are replaced by the branch drawing.** A number exists to
+  address a row, and in a tree it stops referring to anything stable as soon
+  as something above it is filtered.
+- Pods with no Deployment above them — StatefulSet members, Job pods, bare
+  pods — are listed at the root rather than hidden.
+- Above 300 objects the tree **refuses to open** and says so. A tree that
+  quietly stops is indistinguishable from a cluster that really is that small.
+
+`X` is a different view: it walks the relationships a *lens pack* declares,
+into the read-only text panel. `t` is built-in ownership, in the table, with a
+cursor.
+
 ## Top banner (borderless)
 
 Row 1: `⎈ k10s │ context │ ver │ nodes 2/3 ready … ns <name> ▾ │ theme <name> ⟳`

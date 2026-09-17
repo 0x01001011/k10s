@@ -816,6 +816,21 @@ func (m *Model) viewMain(w, h int) Block {
 		nsLabel = "all namespaces"
 	}
 
+	// The tree takes the panel. It is a different shape from the table — no
+	// columns, no row numbers, its own cursor — so it renders its own body
+	// rather than pretending to be a table with indentation.
+	if m.treeOpen() {
+		closeTag := m.mark("close", brk.Render("[ ")+tagStyle.Render("t to close")+brk.Render(" ]"))
+		title := "Owner tree · " + nsLabel
+		if m.rowSearch != "" {
+			title += " · find: " + m.rowSearch
+		}
+		return Panel(th, PanelOpts{
+			Title: title, Tag: closeTag + brk.Render(" ") + zoomTag,
+			TagPlain: "[ t to close ] " + zoomPlain, Focused: focused, W: w, H: h,
+		}, m.treeBody(inner, h-2))
+	}
+
 	// The search box only takes space while it's actually in use. Reserving
 	// two rows permanently cost two rows of data on every screen for a box
 	// that is empty most of the time.
@@ -1198,7 +1213,9 @@ func (m *Model) viewActions(w, h int) Block {
 		}
 		return Panel(th, PanelOpts{Title: "Actions", Focused: false, W: w, H: h}, lines)
 	}
-	r := m.res()
+	// The pane lists what the SELECTED object can do, which in the tree is
+	// the node under the cursor rather than the sidebar's kind.
+	r := m.targetKind()
 
 	// With no cluster there is no object under the cursor, so every action
 	// in this pane would be a button that only produces an error. The pane

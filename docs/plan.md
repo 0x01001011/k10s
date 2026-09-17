@@ -172,7 +172,7 @@ chứng minh được là không làm chậm frame.
 - [ ] **T43** view engine — tách mode switch khỏi `tableBody`
 - [~] **T44** metric history + bar + sparkline — **còn lại**: chart panel braille
 - [x] **T45** action search trong palette + typed gate cho Delete/Drain
-- [ ] **T46** cây lồng thật trong bảng chính (opt-in, chỉ làm sau khi T42 chạy thật)
+- [x] **T46** cây lồng thật trong bảng chính (opt-in, phím `t` — `T` đã là theme)
 
 ### Lanes
 

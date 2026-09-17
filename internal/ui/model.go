@@ -293,6 +293,13 @@ type Model struct {
 	hist  map[string]*ring
 	spark bool
 
+	// tree is the nested owner view (T46) when it is open, and treeIdx the
+	// cursor into it. Not persisted: it starts two informers, so it is a
+	// thing you ask for rather than a thing you come back to.
+	tree       []treeRow
+	treeIdx    int
+	treeScroll int
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -548,6 +555,25 @@ func (m *Model) curKind() domain.Kind {
 		return domain.Kind{}
 	}
 	return ks[m.resIdx]
+}
+
+// targetKind is the kind an action would act on: the sidebar's kind normally,
+// and in the tree the kind of the node under the cursor — a Deployment, a
+// ReplicaSet and a Pod share one list there, and Describe has to mean the row
+// you are looking at.
+//
+// Deliberately NOT folded into curKind(). That is what tableData keys on, so
+// overriding it would repoint the whole table at whatever the cursor happened
+// to be sitting on.
+func (m *Model) targetKind() domain.Kind {
+	if t, ok := m.treeSelected(); ok {
+		for _, k := range m.kinds() {
+			if k.Key == t.ref.Kind {
+				return k
+			}
+		}
+	}
+	return m.curKind()
 }
 
 func (m *Model) res() domain.Kind { return m.curKind() }
@@ -905,6 +931,9 @@ func (m *Model) curRow() []string {
 // events. Looked up by header name (not a fixed index) since :ns all
 // prepends a NAMESPACE column that shifts every other column right.
 func (m *Model) curName() string {
+	if t, ok := m.treeSelected(); ok {
+		return t.name
+	}
 	row := m.curRow()
 	if len(row) == 0 {
 		return "-"
@@ -926,6 +955,9 @@ func (m *Model) curName() string {
 // filter when it names one namespace, or — under :ns all — whatever that
 // row's own NAMESPACE cell says, since rows there span many namespaces.
 func (m *Model) curNamespace() string {
+	if t, ok := m.treeSelected(); ok {
+		return t.ref.Namespace
+	}
 	if m.namespace != domain.AllNamespaces {
 		return m.namespace
 	}
@@ -1772,6 +1804,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.themeIdx = (m.themeIdx - 1 + len(m.themes)) % len(m.themes)
 		m.toast = "theme → " + m.th().Name
 		m.saveConfig()
+	case "t":
+		// The nested owner tree. `T` is the theme cycler and `X` walks
+		// lens-declared edges into the text panel; this is built-in
+		// ownership, in the table, with a cursor. The log viewer's own `t`
+		// is handled above this switch, so it keeps meaning "raw lines"
+		// while you are reading a log.
+		if m.mode == modeTable {
+			m.toggleTree()
+		}
 	case "R":
 		return m.showRelated()
 	case "X":
@@ -2212,6 +2253,10 @@ func (m *Model) move(delta int) {
 			m.textTop = clamp(m.textTop+delta, 0, maxi(0, len(m.textLines)-(m.layout().midH-2)))
 			return
 		}
+		if m.treeOpen() {
+			m.moveTree(delta)
+			return
+		}
 		cols, rows := m.tableData()
 		m.rowIdx = clamp(m.rowIdx+delta, 0, maxi(0, len(rows)-1))
 		// Arrow keys walk only what is on screen, and never open a group you
@@ -2308,7 +2353,7 @@ func (m *Model) fireAction(a Action) tea.Cmd {
 		return nil
 	}
 
-	r := m.curKind()
+	r := m.targetKind()
 	name := m.curName()
 	kind := r.Key
 	ns := m.curNamespace()
