@@ -13,8 +13,49 @@ Cutting one is four steps, in order — see
 
 ## [Unreleased]
 
+## [v0.7.0] — 2026-09-17
+
+[Release notes](docs/releases/v0.7.0.md)
+
+### Added
+
+- Pods open grouped under their owner, Events under their object. One level of
+  collapsible headers over a row slice that stays flat: `space` folds,
+  `:group` picks the key, and a search ignores folding entirely. Costs no new
+  watch — `ownerReferences` is already on the pod.
+- `t` opens the owner tree: Deployment → ReplicaSet → Pod, every node
+  selectable, with actions and the Actions pane following the node's own kind.
+  It starts the ReplicaSet and Deployment watches on the keypress, and says so.
+- Column sort. Click a header to cycle ascending, descending, default; `<` and
+  `>` walk the sort column and `S` flips direction. Cell types are inferred
+  per column, so `10m` reads as minutes in AGE and milliCPU in CPU.
+- `:spark` draws an inline CPU sparkline; `:chart` plots the same 64-sample
+  window as a braille chart under the table.
+- Actions are searchable in the palette, including ones the current kind
+  cannot run — `R`, `X` and `ctrl+y` appeared in no pane or hint before.
+- The table shows `n/m` on its title.
+- `K10S_ASCII=1`, or a locale without UTF-8, switches every meter glyph to an
+  ASCII ladder.
+
 ### Changed
 
+- The banner is 4, 2 or 1 rows by terminal width and drops segments whole
+  rather than clipping; a click zone is marked only if its label is drawn.
+  Gauges shrink 16 → 10 → 6. Below 96 columns the Actions pane collapses and
+  the sidebar stays. An 80×24 terminal goes from 12 visible pods to 17.
+- Columns shrink by weight and drop by priority instead of by position, and
+  widths are measured in display cells rather than bytes.
+- `-` is retired for a vocabulary that says which kind of absence it is:
+  `<none>`, `<cluster>`, `n/a`, `pending`, `lost`. Only `pending` is graded.
+- HPA `MIN` shows the API's default of `1` instead of `-`; a multi-container
+  Deployment shows `<image> +2` rather than one image under an unqualified
+  header; pod CPU/MEM distinguish "no metrics API" from "no reading yet".
+- Bars lead with a grade mark and carry ticks at the 60% and 85% thresholds,
+  so severity is never carried by colour alone.
+- `D` delete and `u` drain require the object's name to be typed. Both were
+  one `enter` away, and `enter` is also the universal "open" key.
+- `←` and `h` focus the resource list, as the docs have said since the first
+  release.
 - Every lens action that needs a value the row cannot supply now collects it in
   a form: ArgoCD rollback, Kargo promote, approve and re-verify, and Longhorn
   backup. `requiresSelection` and `{{.Selected}}` are gone.
@@ -26,6 +67,21 @@ Cutting one is four steps, in order — see
 
 ### Fixed
 
+- The cluster gauge drew an empty bar for any reading from 1% to 6% at width
+  16: the fill truncated with no floor, so a node at 6% was pixel-identical to
+  one at 0%. A negative reading panicked in `strings.Repeat`.
+- `e` applied whatever was on disk when `$EDITOR` exited, so quitting `vi`
+  with `:q` — or an editor that crashed and left the file untouched — wrote
+  the object back to the cluster. Unchanged means nothing is applied, and an
+  empty file is refused.
+- The banner clipped mid-token at 80 columns: the node count ended on `nodes`
+  and the memory total on `81`. The `ns ▾` and `theme ⟳` buttons were marked
+  as click targets past the right-hand edge, so the mouse affordance died
+  silently.
+- NAME was truncated at 100 columns while four columns were still displayed,
+  because the shrink loop always took from the widest column.
+- Column widths were measured in bytes while cells are cut by display width,
+  so one non-ASCII value over-reserved and pushed real columns off screen.
 - A lens `optionsFrom` path may index or fan out over a list
   (`.status.history[*].revision`). The walk followed map keys only, so no
   value living inside an array could be suggested at all.
@@ -33,6 +89,20 @@ Cutting one is four steps, in order — see
   own name. The old fallback meant an action that forgot to declare
   `requiresSelection` wrote the cluster's name where an instance belonged —
   and a misspelled `{{.Params.instnace}}` is now an error, not silence.
+
+### Performance
+
+- `tableData()` is memoised per frame. It is the single read path for the
+  table and had no cache, so one frame called it three to five times, each a
+  full formatted row build — 488µs and 8018 allocations at 2000 pods.
+- The perf guards measure navigation again. `TestKeypressLatency` drove `j`
+  and `k`; `j` is unbound and `k` opens the prompt, so from the second
+  iteration it benchmarked a text field growing to ~400 characters rather than
+  the table. `BenchmarkKeypressFrame` had the same defect, and the `Rows()`
+  guard allowed 30 calls against an actual 4.
+- The metric history behind the sparkline and chart is sampled on the repaint
+  tick, never from the render path, and swept against the live row set — which
+  also gives the trend map the eviction it never had.
 
 ## [v0.6.0] — 2026-09-16
 
@@ -257,7 +327,8 @@ sections above it record work that shipped inside it.
 - Seven themes with live preview via `/theme`.
 - `ctrl+s` copy mode, which releases the mouse to the terminal.
 
-[Unreleased]: https://github.com/0x01001011/k10s/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/0x01001011/k10s/compare/v0.7.0...HEAD
+[v0.7.0]: https://github.com/0x01001011/k10s/compare/v0.6.0...v0.7.0
 [v0.6.0]: https://github.com/0x01001011/k10s/compare/v0.5.0...v0.6.0
 [v0.5.0]: https://github.com/0x01001011/k10s/compare/v0.3.0...v0.5.0
 [v0.3.0]: https://github.com/0x01001011/k10s/compare/v0.2.0...v0.3.0
