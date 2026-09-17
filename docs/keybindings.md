@@ -17,6 +17,9 @@
 | `/`                    | commands — namespace, context, theme, settings                                                                                |
 | `:`                    | narrowing — search, filter, scale                                                                                             |
 | `f`                    | find: focus the main table's row-search box                                                                                   |
+| `<` / `>`              | move the sort column left / right; past either end returns to the backend's own order                                         |
+| `S`                    | flip the sort direction (no-op when nothing is sorted)                                                                        |
+| click a column header  | cycle that column: ascending → descending → default                                                                           |
 | `ctrl+a`               | toggle AI prompt mode (also focuses prompt)                                                                                   |
 
 ## Movement

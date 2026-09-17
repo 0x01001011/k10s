@@ -271,6 +271,13 @@ type Model struct {
 	// a cluster that had stopped changing.
 	rowsMemo *rowsCache
 
+	// sorts is the column sort per kind. Pods sorted by RESTARTS must not
+	// follow you into Services, and coming back to Pods must find it as you
+	// left it. In memory only: config.yaml's parser is a flat hand-rolled
+	// subset that cannot hold a per-kind map, and saved views (T12) own
+	// cross-restart persistence.
+	sorts map[string]sortState
+
 	// promptZoom grows the command box to half the screen so a long
 	// command or AI prompt is readable while typing it.
 	promptZoom bool
@@ -751,6 +758,7 @@ type rowsCache struct {
 	kind   string
 	ns     string
 	search string
+	sort   sortState
 	count  int
 	cols   []string
 	rows   [][]string
@@ -759,14 +767,15 @@ type rowsCache struct {
 func (m *Model) tableData() ([]string, [][]string) {
 	kind := m.curKind().Key
 	count := m.src.RowCount(kind, m.namespace)
+	srt := m.sortFor(kind)
 	if c := m.rowsMemo; c != nil && c.kind == kind && c.ns == m.namespace &&
-		c.search == m.rowSearch && c.count == count {
+		c.search == m.rowSearch && c.sort == srt && c.count == count {
 		return c.cols, c.rows
 	}
 
 	cols, rows := m.buildTableData(kind)
 	m.rowsMemo = &rowsCache{
-		kind: kind, ns: m.namespace, search: m.rowSearch, count: count,
+		kind: kind, ns: m.namespace, search: m.rowSearch, sort: srt, count: count,
 		cols: cols, rows: rows,
 	}
 	return cols, rows
@@ -789,7 +798,9 @@ func (m *Model) buildTableData(kind string) ([]string, [][]string) {
 	if m.rowSearch != "" {
 		rows = filterRows(rows, m.rowSearch)
 	}
-	return cols, rows
+	// Sort last, over the filtered set, so "the worst of what I searched for"
+	// is one question rather than two.
+	return cols, sortRows(rows, m.sortFor(kind), len(cols))
 }
 
 // showNamespaceChooser opens the Namespaces table in the main panel — the
@@ -1723,6 +1734,28 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		// have. R answers "what is next to this"; X answers "what is the
 		// shape, and where in it is the failure".
 		return m.showTree()
+	case "<", ">":
+		// Walk the sort column. `s` is Shell and `ctrl+s` is mouse capture,
+		// and shift+digit is unreliable — terminals send !@#$%^&*( for it,
+		// and 1-9 are spoken for by saved views.
+		if m.mode == modeTable {
+			cols, _ := m.tableData()
+			d := 1
+			if msg.String() == "<" {
+				d = -1
+			}
+			m.moveSortColumn(m.curKind().Key, len(cols), d)
+			m.toast = m.sortToast(cols)
+		}
+	case "S":
+		if m.mode == modeTable {
+			cols, _ := m.tableData()
+			if !m.flipSortDirection(m.curKind().Key) {
+				m.toast = "no sort column — < and > pick one"
+			} else {
+				m.toast = m.sortToast(cols)
+			}
+		}
 	case "z":
 		m.setZoomed(!m.zoomed)
 		m.toast = map[bool]string{true: "zoomed", false: "restored"}[m.zoomed]
@@ -2937,7 +2970,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	_, curRows := m.tableData()
+	curCols, curRows := m.tableData()
+	// Headers first: they sit above the rows and a click on one cycles the
+	// sort through ascending, descending and back to the backend's order.
+	if m.mode == modeTable {
+		for ci := range curCols {
+			if getZone(fmt.Sprintf("hdr:%d", ci)).inBounds(msg) {
+				m.focus = focusMain
+				m.cycleSort(m.curKind().Key, ci)
+				cols, _ := m.tableData()
+				m.toast = m.sortToast(cols)
+				return nil
+			}
+		}
+	}
 	for i := range curRows {
 		if getZone(fmt.Sprintf("row:%d", i)).inBounds(msg) {
 			m.focus = focusMain

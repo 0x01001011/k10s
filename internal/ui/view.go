@@ -1020,10 +1020,25 @@ func (m *Model) tableBody(inner, rows int) []string {
 		return t.arrow(m.anim)
 	}
 
+	srt := m.sortFor(m.curKind().Key)
 	var hdr strings.Builder
 	hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gutter)))
 	for k, ci := range keep {
-		hdr.WriteString(paint(th.Bg, th.Subtle, true, pad(trunc(cols[ci], widths[k]), widths[k])))
+		label, col := cols[ci], th.Subtle
+		if ci == srt.col {
+			// The arrow goes inside the column's own width, never on top of
+			// it: tryFit floors a column at its header width, so widening
+			// the header for an indicator would let the indicator push a
+			// column off the screen.
+			col = th.Accent
+			if w := widths[k] - 2; w > 0 {
+				label = trunc(label, w) + " " + sortArrow(srt.desc)
+			}
+		}
+		cell := paint(th.Bg, col, true, pad(trunc(label, widths[k]), widths[k]))
+		// Marked per column index, not per name: zone ids have to come from
+		// a bounded set or the id table becomes a per-session leak.
+		hdr.WriteString(m.mark(fmt.Sprintf("hdr:%d", ci), cell))
 		if k < len(keep)-1 {
 			hdr.WriteString(paint(th.Bg, th.Bg, false, spaces(gap)))
 		}
