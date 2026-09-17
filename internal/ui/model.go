@@ -1288,14 +1288,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toast = "✗ " + msg.err.Error()
 			return m, nil
 		}
+		// Snapshot what the editor is being given, so an exit that changed
+		// nothing can be told from one that did.
+		before, _ := os.ReadFile(msg.path)
+
 		c, err := editorCommand(os.Getenv("EDITOR"), msg.path)
 		if err != nil {
 			return m, func() tea.Msg {
-				return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, err: err}
+				return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, before: string(before), err: err}
 			}
 		}
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
-			return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, err: err}
+			return editExitMsg{kind: msg.kind, ns: msg.ns, name: msg.name, path: msg.path, before: string(before), err: err}
 		})
 
 	case editExitMsg:
@@ -1316,6 +1320,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, resumeMouse
 		}
 		kind, ns, name := msg.kind, msg.ns, msg.name
+
+		// An editor exit is not an intent to write. Quitting vi with :q, or
+		// an editor that crashed and left the file as it was, used to reach
+		// Apply and put the object back on the cluster — a write nobody
+		// asked for, with a real audit trail behind it.
+		if msg.before != "" && string(data) == msg.before {
+			m.toast = name + " unchanged — nothing applied"
+			return m, resumeMouse
+		}
+		// An empty file is a mistake, not a manifest. Applying it would be a
+		// request the API server is entitled to take literally.
+		if len(strings.TrimSpace(string(data))) == 0 {
+			m.toast = "✗ " + name + ": the file came back empty — nothing applied"
+			return m, resumeMouse
+		}
+
 		apply := m.runAction("✓ "+name+" updated", func() error {
 			return m.src.Apply(kind, ns, name, string(data))
 		})
@@ -2325,8 +2345,13 @@ func (m *Model) fireAction(a Action) tea.Cmd {
 		}
 	case domain.ADelete:
 		m.confirm = &confirmState{
-			title:   "Delete " + r.Short,
-			danger:  true,
+			title:  "Delete " + r.Short,
+			danger: true,
+			// Enter is also the universal "open" key, so a plain confirm
+			// puts deletion one keystroke from every table — D, Enter. The
+			// typed gate already exists and lens packs already use it for
+			// exactly this class of write.
+			typed:   name,
 			message: []string{"Permanently delete", r.Short + "/" + name, "namespace: " + ns, "", "This action CANNOT be undone."},
 			onOK: func(mm *Model) tea.Cmd {
 				return mm.runAction("✓ "+r.Short+"/"+name+" deleted", func() error {
@@ -2376,6 +2401,10 @@ func (m *Model) fireAction(a Action) tea.Cmd {
 		m.confirm = &confirmState{
 			title:  "Drain node",
 			danger: true,
+			// Evicting every pod off a node is the single most consequential
+			// key in the app, and it was gated the same way as a dismissible
+			// notice.
+			typed: name,
 			message: []string{
 				"Cordon and evict all pods from", "no/" + name, "",
 				"Pods are rescheduled onto other nodes.",
@@ -2927,10 +2956,17 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 
 	if m.palOpen {
-		for i := range m.paletteHits() {
+		// Asked once, not once per candidate and again to act: paletteHits
+		// walks every loaded kind's rows, and this was calling it twice per
+		// click on top of the once-per-frame the overlay already costs.
+		hits := m.paletteHits()
+		for i, h := range hits {
 			if getZone(fmt.Sprintf("pal:%d", i)).inBounds(msg) {
 				m.palIdx = i
-				m.gotoHit(m.paletteHits()[i])
+				if h.action != nil {
+					return m.fireHit(h)
+				}
+				m.gotoHit(h)
 				return nil
 			}
 		}

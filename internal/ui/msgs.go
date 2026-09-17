@@ -113,7 +113,12 @@ type editFetchedMsg struct {
 // editExitMsg lands after $EDITOR exits.
 type editExitMsg struct {
 	kind, ns, name, path string
-	err                  error
+	// before is what was handed to the editor, so an exit that changed
+	// nothing can be told from one that did. Without it, quitting vi with
+	// :q applied the object straight back to the cluster — as did a
+	// truncated file from an editor that crashed.
+	before string
+	err    error
 }
 
 // portForwardMsg lands after a port-forward session is up (or failed).

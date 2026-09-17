@@ -26,6 +26,13 @@ type paletteHit struct {
 	label   string // object name, or the kind's name for a kind hit
 	sub     string // context line: kind · namespace
 	row     int    // index into the kind's rows; -1 for a kind itself
+	// action, when set, makes this hit a verb rather than a place.
+	//
+	// The palette found kinds and objects but never actions, so a verb that
+	// is not on the current kind's Actions pane was findable only by already
+	// knowing its key — which is how R, X and ctrl+y came to appear in no
+	// pane and no hint string at all.
+	action *Action
 }
 
 func (m *Model) openPalette() tea.Cmd {
@@ -58,6 +65,27 @@ func (m *Model) paletteHits() []paletteHit {
 	}
 
 	var out []paletteHit
+
+	// Verbs first: they are the shortest list and the one a query like
+	// "restart" is almost certainly after. An action that does not apply to
+	// the kind currently open still appears — the point is to find out that
+	// it exists — and says which kinds can run it.
+	cur := m.curKind()
+	for i := range Actions {
+		a := Actions[i]
+		if !strings.Contains(strings.ToLower(a.Label), q) && !strings.Contains(strings.ToLower(a.ID), q) {
+			continue
+		}
+		sub := "action · " + a.Key
+		if !cur.Can(a.ID) {
+			sub += " · not available on " + cur.Name
+		}
+		out = append(out, paletteHit{kind: cur, kindIdx: m.resIdx, label: a.Label, sub: sub, row: -1, action: &a})
+		if len(out) >= paletteMax {
+			return out
+		}
+	}
+
 	for i, k := range m.kinds() {
 		// Kind itself.
 		if strings.Contains(strings.ToLower(k.Name), q) ||
@@ -143,7 +171,11 @@ func (m *Model) handlePaletteKey(msg tea.KeyMsg) tea.Cmd {
 		if len(hits) == 0 {
 			return nil
 		}
-		m.gotoHit(hits[clamp(m.palIdx, 0, len(hits)-1)])
+		h := hits[clamp(m.palIdx, 0, len(hits)-1)]
+		if h.action != nil {
+			return m.fireHit(h)
+		}
+		m.gotoHit(h)
 		return nil
 	}
 
@@ -157,6 +189,14 @@ func (m *Model) handlePaletteKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // gotoHit jumps to whatever was picked and closes the palette.
+// fireHit runs an action hit against whatever is currently selected. It is
+// split out because gotoHit's job is navigation and an action is not a place.
+func (m *Model) fireHit(h paletteHit) tea.Cmd {
+	m.closePalette()
+	m.focus = focusMain
+	return m.fireAction(*h.action)
+}
+
 func (m *Model) gotoHit(h paletteHit) {
 	m.revealGroup(h.kindIdx)
 	m.selectResource(h.kindIdx)
