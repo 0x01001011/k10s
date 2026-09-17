@@ -522,8 +522,9 @@ func colorOf(cond bool, a, b lipgloss.Color) lipgloss.Color {
 
 // ---- center: table / text -------------------------------------------------
 
-// fitCols sizes the visible columns for avail cells. Columns are dropped from
-// the right (never the first one) before the name column gets crushed.
+// fitCols sizes the visible columns for avail cells. Columns are dropped by
+// priority (never the first one) before the name column gets crushed — see
+// colPriority in columns.go for why position is the wrong answer.
 //
 // extra[ci] is the number of cells a column spends on decoration inside its
 // own width — a trend arrow, a severity glyph. It is reserved here, once, from
@@ -539,7 +540,11 @@ func fitCols(cols []string, rows [][]string, extra []int, avail, gap int) ([]int
 		if ok || len(keep) <= 2 {
 			return w, keep
 		}
-		keep = keep[:len(keep)-1]
+		d := dropIndex(cols, keep)
+		if d < 0 {
+			return w, keep
+		}
+		keep = append(keep[:d], keep[d+1:]...)
 	}
 }
 
@@ -550,8 +555,14 @@ func tryFit(cols []string, rows [][]string, extra, keep []int, avail, gap int) (
 	for k, ci := range keep {
 		nat[k] = 0
 		for _, r := range rows {
-			if ci < len(r) && len(r[ci]) > nat[k] {
-				nat[k] = len(r[ci])
+			// Display cells, not bytes. Cells are padded and cut by display
+			// width further down, so measuring len() here over-reserved for
+			// any non-ASCII value — an event message, an i18n namespace — and
+			// pushed real columns off the right-hand edge.
+			if ci < len(r) {
+				if w := lipgloss.Width(r[ci]); w > nat[k] {
+					nat[k] = w
+				}
 			}
 		}
 		// Decoration widens the values, never the header: a header already
@@ -559,15 +570,28 @@ func tryFit(cols []string, rows [][]string, extra, keep []int, avail, gap int) (
 		if ci < len(extra) {
 			nat[k] += extra[ci]
 		}
-		if h := len(cols[ci]); h > nat[k] {
+		if h := lipgloss.Width(cols[ci]); h > nat[k] {
 			nat[k] = h
 		}
 		m := 7
 		if ci == 0 {
-			m = 18
+			// The identity column asks for its whole natural width, capped.
+			// A flat floor of 18 made tryFit *succeed* by crushing NAME, so
+			// the drop loop never ran: the table showed seven columns with
+			// `api-gateway-7d9f4…` in the one that says which pod this is.
+			// Asking for the real width makes the fit fail instead, which is
+			// what drops a column nobody was reading.
+			m = clamp(nat[k], 18, identityMaxMin)
 		}
 		if cols[ci] == "NAMESPACE" {
 			m = 9 // short values (kube-system, cert-manager…); leave room for NAME
+		}
+		// A column narrower than its own header renders `RESTAR…`, which
+		// names nothing. If it cannot afford its header it should leave the
+		// screen instead, which is what the drop loop is for — so the header
+		// width is a floor, and nat is always at least that wide already.
+		if h := lipgloss.Width(cols[ci]); h > m {
+			m = h
 		}
 		if m > nat[k] {
 			m = nat[k]
@@ -578,11 +602,19 @@ func tryFit(cols []string, rows [][]string, extra, keep []int, avail, gap int) (
 	for _, x := range nat {
 		total += x
 	}
+	// Take the next cell from the column with the largest width per unit of
+	// weight, not the largest width outright. Compared as a cross-product so
+	// the loop stays in integers.
 	for total > avail {
-		bi, bv := -1, 0
+		bi := -1
+		var bn, bw int
 		for i := range nat {
-			if nat[i] > min[i] && nat[i] > bv {
-				bi, bv = i, nat[i]
+			if nat[i] <= min[i] {
+				continue
+			}
+			w := colWeight(cols[keep[i]])
+			if bi < 0 || nat[i]*bw > bn*w {
+				bi, bn, bw = i, nat[i], w
 			}
 		}
 		if bi < 0 {
